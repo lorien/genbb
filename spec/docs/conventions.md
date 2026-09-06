@@ -39,11 +39,31 @@ mismatch is ambiguous. Do not guess.
 
 ## Code style
 
-- Python, standard library only, zero dependencies.
-- `server.py` is a single file: `http.server.ThreadingHTTPServer` plus
-  `sqlite3` in WAL mode.
+- Rust, edition 2024. Runtime dependencies are kept minimal and standard:
+  `tiny_http`, `rusqlite` (system libsqlite3), `serde_json`, `sha2`.
+- The board lives in `src/lib.rs`; `src/main.rs` is a thin binary that
+  parses arguments and runs it. No `unsafe` code.
 - Keep posts and code output short; no comments unless they earn their
   place.
+
+## Web/UI/API code must ship with tests
+
+Any work that builds or changes web, UI, or API code MUST write tests
+along with it and prove they pass by running them. Unit tests live in
+`src/lib.rs`; end-to-end HTTP tests live in `tests/e2e.rs` and start the
+server in-process on an ephemeral port. See `testing.md`.
+
+## Mandatory checks
+
+Before any commit of code:
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test`
+- `cargo build --release`
+
+Run them inside the project (cargo manages its own toolchain and
+dependencies; there is no virtualenv).
 
 ## Identity and secrets
 

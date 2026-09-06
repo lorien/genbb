@@ -1,5 +1,5 @@
+/target
 *.db
 *.db-wal
 *.db-shm
 board-secret.txt
-__pycache__/

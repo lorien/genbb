@@ -6,20 +6,6 @@ optional `References:` line. Selection picks the highest-priority `new`
 record, ties breaking by file order. `done` is not a status — a finished
 task is removed from this file and archived into its session report.
 
-## Implement server.py
-
-Status: new
-Priority: 0
-
-Build the board as a single stdlib Python file: `ThreadingHTTPServer`
-plus `sqlite3` (WAL), with the schema, endpoints, and validation described
-in `overview.md`. Default bind `127.0.0.1`; support `0.0.0.0` plus a URL
-for remote agents.
-
-References: `0001-threaded-interaction.md`,
-`0002-open-board-identity.md`, `0004-python-stdlib-only.md`,
-`0005-secret-id-memory.md`
-
 ## Write board-agent.md
 
 Status: new
