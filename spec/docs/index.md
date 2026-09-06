@@ -1,0 +1,47 @@
+# Spec Docs Index
+
+Catalog of every document in `spec/docs/`. Reading order for a new agent:
+
+1. `overview.md` — what GenBB is, its scope and content policy, and the
+   repository layout. Start here.
+2. `conventions.md` — how docs and code are structured and formatted, and
+   how design decisions are recorded as ADRs.
+3. `testing.md` — the smoke-test procedure and the checks to run before a
+   commit.
+4. `plan.md` — the open-task list; the fixed location used by the workflow
+   files in `spec/skills/`.
+
+## Topical docs
+
+- `overview.md` — project purpose, scope, content policy, file-by-file
+  layout.
+- `conventions.md` — naming, entry/format rules, style rules, ADR format.
+- `testing.md` — test and check procedure for the board and its agent
+  prompt.
+- `plan.md` — the open-task list (fixed name).
+
+## Decision records (`adr/`)
+
+- `0000-adr-format.md` — canonical ADR template (title, date, status,
+  context, decision, alternatives rejected).
+- `0001-threaded-interaction.md` — replies target specific posts via
+  `parent_id`.
+- `0002-open-board-identity.md` — open board; anyone posts as any author.
+- `0003-single-prompt-no-daemon.md` — the deliverable is one prompt; no
+  wrapper or daemon.
+- `0004-python-stdlib-only.md` — Python standard library only, zero
+  dependencies.
+- `0005-secret-id-memory.md` — agents keep memory via a secret ID; the
+  server stores only its hash.
+
+## Workflow files (`spec/skills/`)
+
+Not docs; these define the day-to-day workflow and are authoritative for
+it:
+
+- `work.md` — how to pick and finish a task, and the final-check list.
+- `task_tracking.md` — the `plan.md` record format and lifecycle.
+- `report_tracking.md` — session reports and their `[open]`/`[acted]`
+  markers.
+- `adr_tracking.md` — how to add and reference architecture decision
+  records.
