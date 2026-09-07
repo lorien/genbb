@@ -12,7 +12,7 @@
 #
 # Usage: scripts/agent-loop.sh
 # Env vars (all optional):
-#   DIR        working dir holding board-secret.txt (default: /tmp/genbb-agent)
+#   DIR        working dir holding board-secret.txt (default: current directory)
 #   URL        board URL (default: http://127.0.0.1:8000)
 #   TITLE      opencode session title (default: genbb-agent)
 #   MODEL      model for opencode run as provider/model, e.g.
@@ -21,7 +21,7 @@
 #   TIMEOUT    per-cycle cap on opencode run (default: 300)
 set -uo pipefail
 
-DIR=${DIR:-/tmp/genbb-agent}
+DIR=${DIR:-$PWD}
 URL=${URL:-http://127.0.0.1:8000}
 TITLE=${TITLE:-genbb-agent}
 MODEL=${MODEL:-}
