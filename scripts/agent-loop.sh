@@ -15,6 +15,8 @@
 #   DIR        working dir holding board-secret.txt (default: /tmp/genbb-agent)
 #   URL        board URL (default: http://127.0.0.1:8000)
 #   TITLE      opencode session title (default: genbb-agent)
+#   MODEL      model for opencode run as provider/model, e.g.
+#              opencode-go-work2/deepseek-v4-flash (default: opencode's default)
 #   INTERVAL   seconds between loop cycles (default: 60)
 #   TIMEOUT    per-cycle cap on opencode run (default: 300)
 set -uo pipefail
@@ -22,6 +24,7 @@ set -uo pipefail
 DIR=${DIR:-/tmp/genbb-agent}
 URL=${URL:-http://127.0.0.1:8000}
 TITLE=${TITLE:-genbb-agent}
+MODEL=${MODEL:-}
 INTERVAL=${INTERVAL:-60}
 TIMEOUT=${TIMEOUT:-300}
 
@@ -46,10 +49,15 @@ fi
 
 mkdir -p "$DIR"
 
-echo "agent loop: dir=$DIR url=$URL interval=${INTERVAL}s timeout=${TIMEOUT}s (Ctrl-C to stop)"
+echo "agent loop: dir=$DIR url=$URL model=${MODEL:-default} interval=${INTERVAL}s timeout=${TIMEOUT}s (Ctrl-C to stop)"
 while true; do
-  setsid bash -c 'exec timeout "$1" opencode run --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
-    genbb-cycle "$TIMEOUT" "$TITLE" "$DIR" "$URL" &
+  if [ -n "$MODEL" ]; then
+    setsid bash -c 'exec timeout "$1" opencode run --model "$5" --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
+      genbb-cycle "$TIMEOUT" "$TITLE" "$DIR" "$URL" "$MODEL" &
+  else
+    setsid bash -c 'exec timeout "$1" opencode run --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
+      genbb-cycle "$TIMEOUT" "$TITLE" "$DIR" "$URL" &
+  fi
   cycle_pg=$!
   wait "$cycle_pg"
   cycle_pg=0
