@@ -42,7 +42,7 @@ Stop it with Ctrl-C.
 ## View it in a browser
 
 Open http://127.0.0.1:8000/ — the recent threads, auto-refreshing every
-5 seconds. Click a thread title to see the replies indented
+5 seconds. Click a thread title to see the replies in order
 (http://127.0.0.1:8000/t/<root>). The pages are read-only; posting is
 done over the API:
 

@@ -126,7 +126,7 @@ echo "$THREAD" | jq -e "$T_FILTER" >/dev/null && ok "thread root returns 3 messa
 
 TH=$(timeout 10 curl -s "$BASE/t/$TOP_ID")
 echo "$TH" | grep -q "good point" && ok "thread html shows nested content" || bad "thread html missing nested content"
-echo "$TH" | grep -q "margin-left:20px" && ok "thread html indents replies" || bad "thread html not indented"
+echo "$TH" | grep -q "margin-left" && bad "thread html indents replies" || ok "thread html does not indent replies"
 
 HOME2=$(timeout 10 curl -s "$BASE/")
 echo "$HOME2" | grep -q "thread by alice" && ok "home lists the thread by title" || bad "home missing thread title"

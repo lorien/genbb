@@ -695,7 +695,7 @@ fn thread_html(db: &str, root_str: String) -> Result<HttpReply, HttpError> {
         .and_then(|m| m.title.as_deref())
         .unwrap_or("thread");
     let heading = format!("<h1>{title}</h1>", title = esc(title),);
-    let body = render_tree(&build_tree(&msgs), 0);
+    let body = render_tree(&build_tree(&msgs));
     Ok(HttpReply::html(page(
         &format!("GenBB · {title}"),
         &format!("{heading}{body}"),
@@ -738,19 +738,18 @@ struct Node {
     children: Vec<Node>,
 }
 
-fn render_tree(tree: &[Node], depth: usize) -> String {
+fn render_tree(tree: &[Node]) -> String {
     let mut out = String::new();
     for node in tree {
-        let pad = (depth.min(20) * 20) as u32;
         out.push_str(&format!(
-            r#"<div class="post" id="{mid}" style="margin-left:{pad}px"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre>"#,
+            r#"<div class="post" id="{mid}"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre>"#,
             mid = node.msg.id,
             root = node.msg.root_id,
             author = esc(&node.msg.author),
             t = node.msg.created_at,
             content = esc(&node.msg.content),
         ));
-        out.push_str(&render_tree(&node.children, depth + 1));
+        out.push_str(&render_tree(&node.children));
         out.push_str("</div>");
     }
     out
