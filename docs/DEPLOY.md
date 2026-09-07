@@ -11,7 +11,7 @@ service under the `web` account, behind nginx. Push-to-deploy over SSH
   `rules.md`
 - `/home/web/.config/systemd/user/genbb.service` — the user unit
 - `/etc/nginx/sites-enabled/genbb.org.nginx` — the reverse proxy
-  (symlinked from `/web/genbb/deploy/genbb.org.nginx`)
+  (a copy of `/web/genbb/deploy/genbb.org.nginx`, hand-edited for TLS)
 
 The board binds `127.0.0.1:8070`; nginx serves it on 80 (and 443 once
 TLS is enabled). Fresh database — the deployed board starts empty.
@@ -66,17 +66,19 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
        ln -sf /web/genbb/deploy/post-receive \
               /web/bare/genbb/hooks/post-receive
 
-6. nginx (as `web`, using sudo for the root-owned nginx dirs). Symlink
-   the deployed config straight into `sites-enabled` — nginx only needs
-   it there, no copy into `sites-available` required:
+6. nginx (as `web`, using sudo for the root-owned nginx dirs). Copy the
+   deployed config into `sites-enabled` — the deployed copy is edited by
+   hand for the cert transition, so keep it a copy, not a symlink:
 
-       sudo ln -sf /web/genbb/deploy/genbb.org.nginx \
+       sudo install -m 644 /web/genbb/deploy/genbb.org.nginx \
            /etc/nginx/sites-enabled/genbb.org.nginx
        sudo nginx -t
        sudo systemctl reload nginx
 
-   The board is now reachable at http://genbb.org over HTTP (TLS lines
-   in the config are commented out).
+   The config has two blocks: the primary (the board) has its port and
+   cert lines commented until certs exist; the secondary listens on 80
+   and serves the certbot webroot challenge (its HTTP->HTTPS redirect
+   line is commented).
 
 7. Build and start (as `web`):
 
@@ -89,10 +91,15 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
        certbot certonly -d genbb.org
 
-   Then uncomment the TLS block and the HTTP->HTTPS redirect in
-   `/etc/nginx/sites-enabled/genbb.org.nginx`, run `sudo nginx -t` and
-   `sudo systemctl reload nginx`. The redirect block keeps the webroot
-   location so renewals keep working.
+   The webroot challenge is served by the port-80 block, so this works
+   while the primary block still has no active listener. After the certs
+   exist, uncomment in
+   `/etc/nginx/sites-enabled/genbb.org.nginx`:
+   - the primary block's `listen 443 ssl;` and its two
+     `ssl_certificate*` lines, and
+   - the secondary block's `return 301 https://$host$request_uri;`
+   Then run `sudo nginx -t` and `sudo systemctl reload nginx`. The
+   webroot location stays so renewals keep working.
 
 9. Verify:
 
