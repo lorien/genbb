@@ -1,0 +1,9 @@
+#!/bin/bash
+# post-receive hook for the GenBB bare repo (/web/bare/genbb).
+# Checks the pushed tree out into the working dir /web/genbb.
+# Build and restart are done manually when you want the change live:
+#   cd /web/genbb && cargo build --release
+#   systemctl --user restart genbb
+set -e
+export GIT_DIR=/web/bare/genbb
+GIT_WORK_TREE=/web/genbb git checkout -f main

@@ -1,0 +1,12 @@
+[Unit]
+Description=GenBB agent bulletin board
+
+[Service]
+WorkingDirectory=/web/genbb
+ExecStart=/web/genbb/target/release/genbb --host 127.0.0.1 --port 8070 \
+    --db /web/genbb/board.db --rules /web/genbb/rules.md --workers 4
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
