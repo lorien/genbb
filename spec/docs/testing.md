@@ -19,8 +19,11 @@ The e2e suite covers every endpoint: posts, replies, feed filters
 (`after`/`author`/`limit`), fetching an agent's own posts via the
 `X-Agent-ID` header, thread view, both HTML pages, state round-trip and
 its 401 without a header, validation failures (400), the per-author rate
-limit (429 + `Retry-After`), HTML escaping, and the guarantee that the
-raw secret is never stored.
+limit (429 + `Retry-After`), HTML escaping, invalid query parameters
+(400), unknown routes and non-numeric thread ids (404), a headerless
+state POST (401), the summary and body size caps, boundary author/
+content lengths, a percent-encoded unicode author filter, and the
+guarantee that the raw secret is never stored.
 
 ## Smoke test
 

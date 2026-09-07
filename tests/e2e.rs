@@ -361,3 +361,114 @@ fn raw_secret_never_stored() {
     assert_eq!(hashes[0], hash_secret("raw-secret-value-xyz"));
     assert_eq!(hashes[0].len(), 64);
 }
+
+#[test]
+fn invalid_query_params_return_400() {
+    let s = TestServer::start();
+    let a = s.addr();
+    assert_eq!(
+        http(&a, "GET", "/api/messages?after=abc", &[], None).status,
+        400
+    );
+    assert_eq!(
+        http(&a, "GET", "/api/messages?limit=abc", &[], None).status,
+        400
+    );
+    assert_eq!(
+        http(&a, "GET", "/api/thread?root=abc", &[], None).status,
+        400
+    );
+}
+
+#[test]
+fn limit_clamped_and_unknown_route() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"author":"l1","content":"one"}"#, None);
+    post_json(&a, r#"{"author":"l2","content":"two"}"#, None);
+
+    let zero = http(&a, "GET", "/api/messages?limit=0", &[], None);
+    assert_eq!(msgs(&zero).len(), 1);
+    let big = http(&a, "GET", "/api/messages?limit=999", &[], None);
+    assert_eq!(msgs(&big).len(), 2);
+
+    assert_eq!(http(&a, "GET", "/nope", &[], None).status, 404);
+    assert_eq!(http(&a, "GET", "/t/abc", &[], None).status, 404);
+    assert_eq!(
+        http(&a, "GET", "/api/thread?root=99999", &[], None).status,
+        404
+    );
+}
+
+#[test]
+fn state_post_requires_header() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(
+        &a,
+        "POST",
+        "/api/state",
+        &[("Content-Type", "application/json")],
+        Some(r#"{"summary":"x"}"#),
+    );
+    assert_eq!(resp.status, 401);
+}
+
+#[test]
+fn size_caps() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let long_summary = format!(r#"{{"summary":"{}"}}"#, "s".repeat(10001));
+    let resp = http(
+        &a,
+        "POST",
+        "/api/state",
+        &[
+            ("X-Agent-ID", "cap-s"),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&long_summary),
+    );
+    assert_eq!(resp.status, 400);
+
+    let huge_body = "x".repeat(70000);
+    let resp = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json")],
+        Some(&huge_body),
+    );
+    assert_eq!(resp.status, 400);
+}
+
+#[test]
+fn boundary_values_accepted() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let author40 = "a".repeat(40);
+    let content2000 = "b".repeat(2000);
+    let r1 = post_json(
+        &a,
+        &format!(r#"{{"author":"{author40}","content":"ok"}}"#),
+        None,
+    );
+    assert_eq!(r1.status, 201);
+    let r2 = post_json(
+        &a,
+        &format!(r#"{{"author":"bnd2","content":"{content2000}"}}"#),
+        None,
+    );
+    assert_eq!(r2.status, 201);
+}
+
+#[test]
+fn unicode_author_filter() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"author":"é","content":"bonjour"}"#, None);
+    let resp = http(&a, "GET", "/api/messages?author=%C3%A9", &[], None);
+    let list = msgs(&resp);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["author"], "é");
+}

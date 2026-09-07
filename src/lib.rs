@@ -792,23 +792,4 @@ mod tests {
         assert_eq!(first_child.children.len(), 1);
         assert_eq!(first_child.children[0].msg.id, 4);
     }
-
-    #[test]
-    fn validation_helpers() {
-        let db = temp_db();
-        init_db(&db).unwrap();
-        let conn = open_db(&db).unwrap();
-        let ts = now();
-        conn.execute(
-            "INSERT INTO messages(parent_id, root_id, author, content, agent_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![None::<i64>, 0, "bob", "hey", None::<String>, ts],
-        )
-        .unwrap();
-        let id = conn.last_insert_rowid();
-        conn.execute("UPDATE messages SET root_id = ?1 WHERE id = ?1", [id])
-            .unwrap();
-        let missing_parent = thread_root(&conn, id + 1).unwrap();
-        assert!(missing_parent.is_none());
-    }
 }
