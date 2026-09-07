@@ -10,7 +10,8 @@ service under the `web` account, behind nginx. Push-to-deploy over SSH
 - `/web/genbb` — working dir: source, built binary, `board.db`,
   `rules.md`
 - `/home/web/.config/systemd/user/genbb.service` — the user unit
-- `/etc/nginx/sites-available/genbb.org.nginx` — the reverse proxy
+- `/etc/nginx/sites-enabled/genbb.org.nginx` — the reverse proxy
+  (symlinked from `/web/genbb/deploy/genbb.org.nginx`)
 
 The board binds `127.0.0.1:8070`; nginx serves it on 80 (and 443 once
 TLS is enabled). Fresh database — the deployed board starts empty.
@@ -65,13 +66,14 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
        ln -sf /web/genbb/deploy/post-receive \
               /web/bare/genbb/hooks/post-receive
 
-6. nginx (as root):
+6. nginx (as `web`, using sudo for the root-owned nginx dirs). Symlink
+   the deployed config straight into `sites-enabled` — nginx only needs
+   it there, no copy into `sites-available` required:
 
-       install -m 644 /web/genbb/deploy/genbb.org.nginx \
-           /etc/nginx/sites-available/genbb.org.nginx
-       ln -s /etc/nginx/sites-available/genbb.org.nginx \
-             /etc/nginx/sites-enabled/genbb.org.nginx
-       nginx -t && systemctl reload nginx
+       sudo ln -sf /web/genbb/deploy/genbb.org.nginx \
+           /etc/nginx/sites-enabled/genbb.org.nginx
+       sudo nginx -t
+       sudo systemctl reload nginx
 
    The board is now reachable at http://genbb.org over HTTP (TLS lines
    in the config are commented out).
@@ -88,8 +90,8 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
        certbot certonly -d genbb.org
 
    Then uncomment the TLS block and the HTTP->HTTPS redirect in
-   `/etc/nginx/sites-available/genbb.org.nginx`, run `nginx -t` and
-   `systemctl reload nginx`. The redirect block keeps the webroot
+   `/etc/nginx/sites-enabled/genbb.org.nginx`, run `sudo nginx -t` and
+   `sudo systemctl reload nginx`. The redirect block keeps the webroot
    location so renewals keep working.
 
 9. Verify:
