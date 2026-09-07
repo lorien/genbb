@@ -110,11 +110,20 @@ fn http(
 }
 
 fn post_json(addr: &str, body: &str, agent: Option<&str>) -> HttpResp {
+    let payload = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(mut v) => {
+            if v.get("parent_id").is_none() && v.get("title").is_none() {
+                v["title"] = serde_json::json!("test title");
+            }
+            v.to_string()
+        }
+        Err(_) => body.to_string(),
+    };
     let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
     if let Some(s) = agent {
         headers.push(("X-Agent-ID", s));
     }
-    http(addr, "POST", "/api/messages", &headers, Some(body))
+    http(addr, "POST", "/api/messages", &headers, Some(&payload))
 }
 
 fn body_json(resp: &HttpResp) -> serde_json::Value {
@@ -332,8 +341,10 @@ fn thread_api_and_html_pages() {
 
     let index = http(&a, "GET", "/", &[], None);
     assert_eq!(index.status, 200);
-    assert!(index.body.contains("root post"));
+    assert!(index.body.contains("test title"));
+    assert!(index.body.contains(&format!("/t/{top_id}")));
     assert!(index.body.contains("<meta http-equiv=\"refresh\""));
+    assert!(index.body.contains(&format!("#{top_id}")));
 
     let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
     assert_eq!(thread_html.status, 200);
@@ -344,14 +355,17 @@ fn thread_api_and_html_pages() {
 fn html_escapes_user_content() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(
+    let top = post_json(
         &a,
         r#"{"author":"<b>evil</b>","content":"<script>alert(1)</script>"}"#,
         None,
     );
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
     let index = http(&a, "GET", "/", &[], None);
-    assert!(index.body.contains("&lt;script&gt;"));
-    assert!(!index.body.contains("<script>alert(1)</script>"));
+    assert!(index.body.contains("&lt;b&gt;evil&lt;/b&gt;"));
+    let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
+    assert!(thread_html.body.contains("&lt;script&gt;"));
+    assert!(!thread_html.body.contains("<script>alert(1)</script>"));
 }
 
 #[test]
@@ -571,4 +585,104 @@ fn agents_listing_and_home() {
     let home = http(&a, "GET", "/", &[], None);
     assert!(home.body.contains("alpha-1a2b"));
     assert!(home.body.contains("agents"));
+}
+
+#[test]
+fn title_required_on_top_level() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let no_title = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json")],
+        Some(r#"{"author":"nt","content":"hi"}"#),
+    );
+    assert_eq!(no_title.status, 400);
+
+    let long_title = "t".repeat(121);
+    let long = format!(r#"{{"author":"nt2","title":"{long_title}","content":"hi"}}"#);
+    let resp = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json")],
+        Some(&long),
+    );
+    assert_eq!(resp.status, 400);
+
+    let ok = post_json(
+        &a,
+        r#"{"author":"nt3","title":"my thread","content":"hi"}"#,
+        None,
+    );
+    assert_eq!(ok.status, 201);
+    let id = body_json(&ok)["id"].as_i64().unwrap();
+    assert_eq!(body_json(&ok)["title"], "my thread");
+
+    let reply_with_title = post_json(
+        &a,
+        &format!(r#"{{"author":"nt4","content":"reply","parent_id":{id}}}"#),
+        None,
+    );
+    let with_title =
+        format!(r#"{{"author":"nt5","title":"no","content":"reply","parent_id":{id}}}"#);
+    let resp = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json")],
+        Some(&with_title),
+    );
+    assert_eq!(resp.status, 400);
+    let _ = reply_with_title;
+}
+
+#[test]
+fn title_in_feed_thread_and_home_list() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let top = post_json(
+        &a,
+        r#"{"author":"ta","title":"alpha thread","content":"root"}"#,
+        None,
+    );
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    let r1 = post_json(
+        &a,
+        &format!(r#"{{"author":"tb","content":"reply","parent_id":{top_id}}}"#),
+        None,
+    );
+    let r1_id = body_json(&r1)["id"].as_i64().unwrap();
+    post_json(
+        &a,
+        &format!(r#"{{"author":"tc","content":"two","parent_id":{r1_id}}}"#),
+        None,
+    );
+    post_json(
+        &a,
+        r#"{"author":"td","title":"second thread","content":"other root"}"#,
+        None,
+    );
+
+    let feed = http(&a, "GET", "/api/messages", &[], None);
+    assert_eq!(body_json(&feed)["messages"][0]["title"], "alpha thread");
+    assert_eq!(
+        body_json(&feed)["messages"][1]["title"],
+        serde_json::Value::Null
+    );
+
+    let thread = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
+    assert_eq!(body_json(&thread)["messages"][0]["title"], "alpha thread");
+
+    let home = http(&a, "GET", "/", &[], None);
+    assert!(home.body.contains("alpha thread"));
+    assert!(home.body.contains("second thread"));
+    assert!(home.body.contains("2 replies"));
+    assert!(home.body.contains(&format!("#{top_id}")));
+    assert!(home.body.contains(&format!("/t/{top_id}#{top_id}")));
+    let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
+    assert!(thread_html.body.contains("<h1>alpha thread</h1>"));
+    assert!(thread_html.body.contains(&format!("id=\"{top_id}\"")));
+    assert!(thread_html.body.contains(&format!("/t/{top_id}#{r1_id}")));
 }

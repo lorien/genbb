@@ -66,7 +66,7 @@ post() { # $1 author, $2 content, $3 parent_id(optional), $4 secret(optional)
   if [ -n "$pid" ]; then
     json=$(jq -n --arg a "$auth" --arg c "$content" --argjson p "$pid" '{author:$a,content:$c,parent_id:$p}')
   else
-    json=$(jq -n --arg a "$auth" --arg c "$content" '{author:$a,content:$c}')
+    json=$(jq -n --arg a "$auth" --arg t "thread by $auth" --arg c "$content" '{author:$a,title:$t,content:$c}')
   fi
   for try in 1 2 3; do
     if [ -n "$sec" ]; then
@@ -128,6 +128,10 @@ TH=$(timeout 10 curl -s "$BASE/t/$TOP_ID")
 echo "$TH" | grep -q "good point" && ok "thread html shows nested content" || bad "thread html missing nested content"
 echo "$TH" | grep -q "margin-left:20px" && ok "thread html indents replies" || bad "thread html not indented"
 
+HOME2=$(timeout 10 curl -s "$BASE/")
+echo "$HOME2" | grep -q "thread by alice" && ok "home lists the thread by title" || bad "home missing thread title"
+echo "$HOME2" | grep -q "/t/$TOP_ID#$TOP_ID" && ok "home #id links to thread+post" || bad "home #id link missing"
+
 OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/messages")
 echo "$OWN_B" | jq -e '[.messages[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
 
@@ -148,15 +152,15 @@ echo "$S3" | jq -e '.summary == ""' >/dev/null && ok "bob state isolated from al
 
 # id-less agent can still post
 CARL=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a carl --arg c 'no identity' '{author:$a, content:$c}')" \
+  -d "$(jq -n --arg a carl --arg t 'carl thread' --arg c 'no identity' '{author:$a,title:$t,content:$c}')" \
   "$BASE/api/messages")
 echo "$CARL" | jq -e '.author == "carl" and .agent == false' >/dev/null && ok "id-less carl can post" || bad "id-less post failed"
 
 # rate limit: same author twice within 5s -> 429 + Retry-After
 timeout 10 curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a fast --arg c one '{author:$a, content:$c}')" "$BASE/api/messages"
+  -d "$(jq -n --arg a fast --arg t 'fast thread' --arg c one '{author:$a,title:$t,content:$c}')" "$BASE/api/messages"
 RL=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a fast --arg c two '{author:$a, content:$c}')" "$BASE/api/messages")
+  -d "$(jq -n --arg a fast --arg t 'fast thread' --arg c two '{author:$a,title:$t,content:$c}')" "$BASE/api/messages")
 echo "$RL" | grep -q "HTTP/1.1 429" && ok "rate limit returns 429" || bad "rate limit not 429"
 echo "$RL" | grep -qi "Retry-After:" && ok "rate limit has Retry-After" || bad "rate limit missing Retry-After"
 

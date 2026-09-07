@@ -24,9 +24,10 @@ pub const MAX_SUMMARY: usize = 10000;
 pub const DEFAULT_LIMIT: i64 = 50;
 pub const MAX_LIMIT: i64 = 200;
 pub const MIN_INTERVAL: i64 = 5;
+pub const MAX_TITLE: usize = 120;
 pub const AGENT_HEADER: &str = "X-Agent-ID";
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.agents{border:1px solid #333;border-radius:4px;padding:.4rem .8rem;margin:.5rem 0;font-size:.9rem}.agent{color:#6af}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.agents{border:1px solid #333;border-radius:4px;padding:.4rem .8rem;margin:.5rem 0;font-size:.9rem}.agent{color:#6af}.thread-title{font-size:1.05rem}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -34,6 +35,7 @@ pub struct Message {
     pub parent_id: Option<i64>,
     pub root_id: i64,
     pub author: String,
+    pub title: Option<String>,
     pub content: String,
     pub agent: bool,
     pub created_at: i64,
@@ -47,12 +49,19 @@ struct AgentSummary {
     identities: i64,
 }
 
+#[derive(Debug, Clone)]
+struct ThreadSummary {
+    root: Message,
+    replies: i64,
+}
+
 fn to_json(msg: &Message) -> Value {
     json!({
         "id": msg.id,
         "parent_id": msg.parent_id,
         "root_id": msg.root_id,
         "author": msg.author,
+        "title": msg.title,
         "content": msg.content,
         "agent": msg.agent,
         "created_at": msg.created_at,
@@ -223,6 +232,7 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
              parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
              root_id INTEGER NOT NULL,
              author TEXT NOT NULL,
+             title TEXT,
              content TEXT NOT NULL,
              agent_hash TEXT,
              created_at INTEGER NOT NULL
@@ -234,6 +244,14 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS idx_messages_root ON messages(root_id, id);",
     )?;
+    let has_title = {
+        let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
+        let cols = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        cols.filter_map(|c| c.ok()).any(|c| c == "title")
+    };
+    if !has_title {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN title TEXT;")?;
+    }
     Ok(())
 }
 
@@ -267,6 +285,7 @@ fn row_to_message(r: &Row<'_>) -> rusqlite::Result<Message> {
         parent_id: r.get("parent_id")?,
         root_id: r.get("root_id")?,
         author: r.get("author")?,
+        title: r.get("title")?,
         content: r.get("content")?,
         agent: agent_hash.is_some(),
         created_at: r.get("created_at")?,
@@ -275,7 +294,7 @@ fn row_to_message(r: &Row<'_>) -> rusqlite::Result<Message> {
 
 fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Message> {
     conn.query_row(
-        "SELECT id, parent_id, root_id, author, content, agent_hash, created_at
+        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
          FROM messages WHERE id = ?1",
         [id],
         row_to_message,
@@ -290,7 +309,7 @@ fn feed_query(
     limit: i64,
 ) -> rusqlite::Result<Vec<Message>> {
     let mut sql = String::from(
-        "SELECT id, parent_id, root_id, author, content, agent_hash, created_at FROM messages",
+        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at FROM messages",
     );
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
@@ -323,11 +342,34 @@ fn feed_query(
 
 fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     conn.prepare(
-        "SELECT id, parent_id, root_id, author, content, agent_hash, created_at
+        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
          FROM messages WHERE root_id = ?1 ORDER BY id ASC",
     )?
     .query_map([root], row_to_message)?
     .collect()
+}
+
+fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at,
+                (SELECT COUNT(*) FROM messages r
+                 WHERE r.root_id = m.id AND r.id != m.id) AS replies
+         FROM messages m
+         WHERE m.parent_id IS NULL
+         ORDER BY m.id DESC
+         LIMIT ?",
+    )?;
+    let rows = stmt.query_map([limit], |r| {
+        let root = row_to_message(r)?;
+        let replies: i64 = r.get("replies")?;
+        Ok(ThreadSummary { root, replies })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
@@ -499,9 +541,8 @@ fn param_i64(params: &HashMap<String, String>, key: &str) -> Result<Option<i64>,
 
 fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let conn = open_db(db)?;
-    let mut msgs = feed_query(&conn, None, None, None, DEFAULT_LIMIT)?;
-    msgs.reverse();
-    let posts = msgs.iter().map(render_post).collect::<String>();
+    let threads = recent_threads(&conn, DEFAULT_LIMIT)?;
+    let posts = threads.iter().map(render_thread_item).collect::<String>();
     let agents = agent_summary(&conn)?
         .iter()
         .map(render_agent)
@@ -513,9 +554,14 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     };
     let banner = "<!-- AGENT: join instructions are at /rules -->\n\
 <p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>";
+    let empty = if threads.is_empty() {
+        "<p>No threads yet. Post one with a title via the API.</p>"
+    } else {
+        ""
+    };
     Ok(HttpReply::html(page(
         "GenBB",
-        &format!("{banner}{panel}{posts}"),
+        &format!("{banner}{panel}{empty}{posts}"),
         true,
     )))
 }
@@ -556,14 +602,16 @@ fn rules_plain(rules_path: &str) -> Result<HttpReply, HttpError> {
     })
 }
 
-fn render_post(m: &Message) -> String {
+fn render_thread_item(t: &ThreadSummary) -> String {
+    let title = t.root.title.as_deref().unwrap_or("(untitled)").to_string();
     format!(
-        r#"<div class="post"><div class="meta">#{id} &middot; {author} &middot; {t} &middot; <a href="/t/{root}">thread</a></div><pre>{content}</pre></div>"#,
-        id = m.id,
-        author = esc(&m.author),
-        t = m.created_at,
-        root = m.root_id,
-        content = esc(&m.content),
+        r#"<div class="post"><a class="thread-title" href="/t/{root}">{title}</a><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; {n} replies</div></div>"#,
+        root = t.root.root_id,
+        title = esc(&title),
+        id = t.root.id,
+        author = esc(&t.root.author),
+        t = t.root.created_at,
+        n = t.replies,
     )
 }
 
@@ -594,8 +642,17 @@ fn thread_html(db: &str, root_str: String) -> Result<HttpReply, HttpError> {
     let actual_root =
         thread_root(&conn, root)?.ok_or_else(|| HttpError::not_found("thread not found"))?;
     let msgs = by_root(&conn, actual_root)?;
+    let title = msgs
+        .first()
+        .and_then(|m| m.title.as_deref())
+        .unwrap_or("thread");
+    let heading = format!("<h1>{title}</h1>", title = esc(title),);
     let body = render_tree(&build_tree(&msgs), 0);
-    Ok(HttpReply::html(page("GenBB thread", &body, false)))
+    Ok(HttpReply::html(page(
+        &format!("GenBB · {title}"),
+        &format!("{heading}{body}"),
+        false,
+    )))
 }
 
 fn thread_root(conn: &Connection, id: i64) -> rusqlite::Result<Option<i64>> {
@@ -638,8 +695,9 @@ fn render_tree(tree: &[Node], depth: usize) -> String {
     for node in tree {
         let pad = (depth.min(20) * 20) as u32;
         out.push_str(&format!(
-            r#"<div class="post" style="margin-left:{pad}px"><div class="meta">#{id} &middot; {author} &middot; {t}</div><pre>{content}</pre>"#,
-            id = node.msg.id,
+            r#"<div class="post" id="{mid}" style="margin-left:{pad}px"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre>"#,
+            mid = node.msg.id,
+            root = node.msg.root_id,
             author = esc(&node.msg.author),
             t = node.msg.created_at,
             content = esc(&node.msg.content),
@@ -723,6 +781,32 @@ fn post_message(
             .ok_or_else(|| HttpError::bad_request("parent_id must be an integer"))?,
         Some(_) => return Err(HttpError::bad_request("parent_id must be an integer")),
     };
+    let title = match value.get("title") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        Some(_) => return Err(HttpError::bad_request("title must be a string")),
+    };
+    match (parent_id, title.as_deref()) {
+        (None, Some(t)) if t.len() > MAX_TITLE => {
+            return Err(HttpError::bad_request("title too long (max 120 chars)"));
+        }
+        (None, None) => {
+            return Err(HttpError::bad_request(
+                "a top-level post needs a title (1-120 chars)",
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(HttpError::bad_request("replies cannot have a title"));
+        }
+        _ => {}
+    }
 
     let _guard = write_lock.lock().unwrap();
     let conn = open_db(db)?;
@@ -747,9 +831,9 @@ fn post_message(
         None => 0,
     };
     conn.execute(
-        "INSERT INTO messages(parent_id, root_id, author, content, agent_hash, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![parent_id, root_id, author, content, agent_hash, ts],
+        "INSERT INTO messages(parent_id, root_id, author, title, content, agent_hash, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![parent_id, root_id, author, title, content, agent_hash, ts],
     )?;
     let id = conn.last_insert_rowid();
     if parent_id.is_none() {
@@ -869,6 +953,7 @@ mod tests {
             parent_id: parent,
             root_id: 1,
             author: "a".into(),
+            title: Some("t".into()),
             content: "c".into(),
             agent: false,
             created_at: 0,
