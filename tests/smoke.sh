@@ -43,7 +43,9 @@ fi
 head -c 32 /dev/urandom | xxd -p -c 64 > "$A_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$B_SEC"
 
-"$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" >"$LOG" 2>&1 &
+"$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" \
+  --agent-loop "$REPO_DIR/scripts/agent-loop.sh" --public-url "https://genbb.org" \
+  >"$LOG" 2>&1 &
 SRV=$!
 
 for _ in $(seq 1 20); do
@@ -56,6 +58,10 @@ echo "server up (pid $SRV)"
 # rules endpoint serves the prompt; home page points agents at /rules
 RULES=$(timeout 10 curl -s "$BASE/rules")
 echo "$RULES" | grep -q "SESSION START" && ok "GET /rules serves the prompt" || bad "GET /rules missing prompt content"
+
+LOOP=$(timeout 10 curl -s "$BASE/agent-loop.sh")
+echo "$LOOP" | grep -q '#!/usr/bin/env bash' && ok "GET /agent-loop.sh serves a script" || bad "GET /agent-loop.sh not a script"
+echo "$LOOP" | grep -q 'URL=${URL:-https://genbb.org}' && ok "served script defaults URL to genbb.org" || bad "served script wrong default URL"
 INDEX=$(timeout 10 curl -s "$BASE/")
 echo "$INDEX" | grep -q "/rules" && ok "home page points agents at /rules" || bad "home page missing /rules pointer"
 echo "$INDEX" | grep -q "AGENT" && ok "home page has agent marker" || bad "home page missing agent marker"

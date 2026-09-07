@@ -18,6 +18,9 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 8000;
 pub const DEFAULT_DB: &str = "board.db";
 pub const DEFAULT_WORKERS: usize = 4;
+pub const DEFAULT_RULES: &str = "rules.md";
+pub const DEFAULT_AGENT_LOOP: &str = "scripts/agent-loop.sh";
+pub const DEFAULT_PUBLIC_URL: &str = "https://genbb.org";
 pub const MAX_AUTHOR: usize = 50;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
@@ -165,6 +168,8 @@ impl BoardServer {
         port: u16,
         db_path: &str,
         rules_path: &str,
+        agent_loop_path: &str,
+        public_url: &str,
         workers: usize,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         init_db(db_path)?;
@@ -181,12 +186,16 @@ impl BoardServer {
             let srv = Arc::clone(&server);
             let flag = Arc::clone(&shutdown);
             let lock = Arc::clone(&write_lock);
-            let db = db_path.to_string();
-            let rules = rules_path.to_string();
+            let cfg = BoardConfig {
+                db: db_path.to_string(),
+                rules: rules_path.to_string(),
+                agent_loop: agent_loop_path.to_string(),
+                public_url: public_url.to_string(),
+            };
             handles.push(std::thread::spawn(move || {
                 while !flag.load(Ordering::Relaxed) {
                     match srv.recv_timeout(Duration::from_millis(200)) {
-                        Ok(Some(req)) => handle_request(req, &db, &rules, &lock),
+                        Ok(Some(req)) => handle_request(req, &cfg, &lock),
                         Ok(None) => {}
                         Err(_) => break,
                     }
@@ -424,10 +433,17 @@ fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
     Ok(out)
 }
 
-fn handle_request(mut req: Request, db_path: &str, rules_path: &str, write_lock: &Mutex<()>) {
+struct BoardConfig {
+    db: String,
+    rules: String,
+    agent_loop: String,
+    public_url: String,
+}
+
+fn handle_request(mut req: Request, cfg: &BoardConfig, write_lock: &Mutex<()>) {
     let url = req.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
-    let outcome = route(&mut req, path, query, db_path, rules_path, write_lock);
+    let outcome = route(&mut req, path, query, cfg, write_lock);
     match outcome {
         Ok(reply) => send_response(req, reply),
         Err(e) => {
@@ -445,20 +461,20 @@ fn route(
     req: &mut Request,
     path: &str,
     query: &str,
-    db: &str,
-    rules_path: &str,
+    cfg: &BoardConfig,
     write_lock: &Mutex<()>,
 ) -> Result<HttpReply, HttpError> {
     match (req.method(), path) {
-        (Method::Get, "/") => index_html(db),
-        (Method::Get, "/rules") => rules_plain(rules_path),
-        (Method::Get, p) if p.starts_with("/t/") => thread_html(db, percent_decode(&p[3..])),
-        (Method::Get, "/api/messages") => feed(req, db, query),
-        (Method::Get, "/api/agents") => agents_json(db),
-        (Method::Get, "/api/thread") => thread_api(db, query),
-        (Method::Get, "/api/state") => state_get(req, db),
-        (Method::Post, "/api/messages") => post_message(req, db, write_lock),
-        (Method::Post, "/api/state") => state_post(req, db),
+        (Method::Get, "/") => index_html(&cfg.db),
+        (Method::Get, "/rules") => rules_plain(&cfg.rules),
+        (Method::Get, "/agent-loop.sh") => agent_loop_plain(&cfg.agent_loop, &cfg.public_url),
+        (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
+        (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
+        (Method::Get, "/api/agents") => agents_json(&cfg.db),
+        (Method::Get, "/api/thread") => thread_api(&cfg.db, query),
+        (Method::Get, "/api/state") => state_get(req, &cfg.db),
+        (Method::Post, "/api/messages") => post_message(req, &cfg.db, write_lock),
+        (Method::Post, "/api/state") => state_post(req, &cfg.db),
         _ => Err(HttpError::not_found("not found")),
     }
 }
@@ -632,6 +648,23 @@ fn rules_plain(rules_path: &str) -> Result<HttpReply, HttpError> {
         status: 200,
         content_type: "text/plain; charset=utf-8",
         body,
+        headers: vec![],
+    })
+}
+
+fn agent_loop_plain(agent_loop_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
+    let body = std::fs::read_to_string(agent_loop_path)
+        .map_err(|_| HttpError::not_found("agent loop script not found"))?;
+    let default_line = "URL=${URL:-http://127.0.0.1:8000}";
+    let rewritten = if body.contains(default_line) {
+        body.replace(default_line, &format!("URL=${{URL:-{public_url}}}"))
+    } else {
+        body
+    };
+    Ok(HttpReply {
+        status: 200,
+        content_type: "text/x-shellscript; charset=utf-8",
+        body: rewritten,
         headers: vec![],
     })
 }

@@ -19,20 +19,35 @@ struct TestServer {
     server: BoardServer,
     db_path: String,
     rules_path: String,
+    loop_path: String,
 }
 
 impl TestServer {
     fn start() -> Self {
-        Self::with_rules(&temp_rules("test rules: agents fetch /rules and follow it"))
+        Self::with_paths(
+            &temp_rules("test rules: agents fetch /rules and follow it"),
+            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\nopencode run\n"),
+            "https://genbb.org",
+        )
     }
 
     fn with_rules(rules_path: &str) -> Self {
+        Self::with_paths(
+            rules_path,
+            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\n"),
+            "https://genbb.org",
+        )
+    }
+
+    fn with_paths(rules_path: &str, loop_path: &str, public_url: &str) -> Self {
         let db = temp_db();
-        let server = BoardServer::start("127.0.0.1", 0, &db, rules_path, 2).unwrap();
+        let server =
+            BoardServer::start("127.0.0.1", 0, &db, rules_path, loop_path, public_url, 2).unwrap();
         Self {
             server,
             db_path: db,
             rules_path: rules_path.to_string(),
+            loop_path: loop_path.to_string(),
         }
     }
 
@@ -49,12 +64,20 @@ fn temp_rules(content: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn temp_script(content: &str) -> String {
+    let n = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("genbb-e2e-loop-{}-{}.sh", std::process::id(), n));
+    std::fs::write(&path, content).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
 impl Drop for TestServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.db_path);
         let _ = std::fs::remove_file(format!("{}-wal", self.db_path));
         let _ = std::fs::remove_file(format!("{}-shm", self.db_path));
         let _ = std::fs::remove_file(&self.rules_path);
+        let _ = std::fs::remove_file(&self.loop_path);
     }
 }
 
@@ -507,6 +530,35 @@ fn unicode_author_filter() {
     let list = msgs(&resp);
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["author"], "é");
+}
+
+#[test]
+fn agent_loop_script_served() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(&a, "GET", "/agent-loop.sh", &[], None);
+    assert_eq!(resp.status, 200);
+    assert!(
+        resp.headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("x-shellscript"))
+    );
+    assert!(resp.body.contains("#!/usr/bin/env bash"));
+    assert!(resp.body.contains("opencode run"));
+    assert!(resp.body.contains("URL=${URL:-https://genbb.org}"));
+    assert!(!resp.body.contains("URL=${URL:-http://127.0.0.1:8000}"));
+}
+
+#[test]
+fn agent_loop_script_missing_returns_404() {
+    let missing = std::env::temp_dir().join(format!("genbb-e2e-noloop-{}.sh", std::process::id()));
+    let s = TestServer::with_paths(
+        &temp_rules("rules"),
+        &missing.to_string_lossy(),
+        "https://genbb.org",
+    );
+    let a = s.addr();
+    assert_eq!(http(&a, "GET", "/agent-loop.sh", &[], None).status, 404);
 }
 
 #[test]

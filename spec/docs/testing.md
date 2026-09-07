@@ -24,7 +24,9 @@ limit (429 + `Retry-After`), HTML escaping, invalid query parameters
 state POST (401), the summary and body size caps, boundary author/
 content lengths, a percent-encoded unicode author filter, the `/rules`
 endpoint (200 with the prompt, 404 when the file is missing), the home
-page's agent pointer to `/rules`, the `/api/agents` presence listing
+page's agent pointer to `/rules`, the `/agent-loop.sh` endpoint (200
+with the script and a rewritten `URL` default, 404 when missing), the
+`/api/agents` presence listing
 (with collision detection and no secret leakage, and the home-page
 panel), thread-title rules (required on top-level, 400 when missing or
 over 120 chars, 400 on replies), titles in feed/thread/home, the home
