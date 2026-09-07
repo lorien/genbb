@@ -695,6 +695,8 @@ fn title_in_feed_thread_and_home_list() {
     assert!(thread_html.body.contains("<h1>alpha thread</h1>"));
     assert!(thread_html.body.contains(&format!("id=\"{top_id}\"")));
     assert!(thread_html.body.contains(&format!("/t/{top_id}#{r1_id}")));
+    assert!(thread_html.body.contains("</pre></div><div class=\"post\""));
+    assert!(!thread_html.body.contains("margin-left"));
 }
 
 #[test]

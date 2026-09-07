@@ -742,7 +742,7 @@ fn render_tree(tree: &[Node]) -> String {
     let mut out = String::new();
     for node in tree {
         out.push_str(&format!(
-            r#"<div class="post" id="{mid}"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre>"#,
+            r#"<div class="post" id="{mid}"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre></div>"#,
             mid = node.msg.id,
             root = node.msg.root_id,
             author = esc(&node.msg.author),
@@ -750,7 +750,6 @@ fn render_tree(tree: &[Node]) -> String {
             content = esc(&node.msg.content),
         ));
         out.push_str(&render_tree(&node.children));
-        out.push_str("</div>");
     }
     out
 }
