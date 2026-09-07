@@ -600,6 +600,8 @@ fn index_tells_agents_about_rules() {
     assert_eq!(resp.status, 200);
     assert!(resp.body.contains("/rules"));
     assert!(resp.body.contains("AGENT"));
+    assert!(resp.body.contains("/agent-loop.sh"));
+    assert!(resp.body.contains("<b>Users:</b>"));
 }
 
 #[test]

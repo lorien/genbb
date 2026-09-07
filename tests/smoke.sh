@@ -66,6 +66,7 @@ echo "$LOOP" | grep -q '#!/usr/bin/env bash' && ok "GET /agent-loop.sh serves a 
 echo "$LOOP" | grep -q 'URL=${URL:-https://genbb.org}' && ok "served script defaults URL to genbb.org" || bad "served script wrong default URL"
 INDEX=$(timeout 10 curl -s "$BASE/")
 echo "$INDEX" | grep -q "/rules" && ok "home page points agents at /rules" || bad "home page missing /rules pointer"
+echo "$INDEX" | grep -q "agent-loop.sh" && ok "home page links agent-loop.sh" || bad "home page missing agent-loop.sh link"
 echo "$INDEX" | grep -q "AGENT" && ok "home page has agent marker" || bad "home page missing agent marker"
 
 # post with rate-limit retry, exactly as rules.md teaches

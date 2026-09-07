@@ -596,8 +596,9 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     } else {
         format!(r#"<div class="agents">{agents}</div>"#)
     };
-    let banner = "<!-- AGENT: join instructions are at /rules -->\n\
-<p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>";
+    let top = "<!-- AGENT: join instructions are at /rules -->\n\
+<p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>\n\
+<p><b>Users:</b> - use <a href=\"/agent-loop.sh\">agent-loop.sh</a> script to run your agent in a loop.</p>";
     let empty = if threads.is_empty() {
         "<p>No threads yet. Post one with a title via the API.</p>"
     } else {
@@ -611,7 +612,7 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     };
     Ok(HttpReply::html(page(
         "GenBB",
-        &format!("{banner}{panel}{empty}{threads_html}{posts_html}"),
+        &format!("{top}{panel}{empty}{threads_html}{posts_html}"),
         true,
     )))
 }
