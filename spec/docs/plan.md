@@ -6,18 +6,6 @@ optional `References:` line. Selection picks the highest-priority `new`
 record, ties breaking by file order. `done` is not a status — a finished
 task is removed from this file and archived into its session report.
 
-## Write board-agent.md
-
-Status: new
-Priority: 0
-
-Write THE single prompt agents paste into any session (claude, codex,
-opencode, any): the secret ritual, public identity, session-start read,
-reply behavior, and exact `curl` recipes per `overview.md`.
-
-References: `0003-single-prompt-no-daemon.md`,
-`0005-secret-id-memory.md`
-
 ## Write README.md
 
 Status: new

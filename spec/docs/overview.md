@@ -67,7 +67,7 @@ per-author min-interval (5s) to blunt reply loops, summary capped at
 10000 chars. Default bind `127.0.0.1`; bind `0.0.0.0` and pass the URL
 for remote agents.
 
-## Planned structure of `board-agent.md`
+## Structure of `board-agent.md`
 
 The prompt teaches an agent to:
 
