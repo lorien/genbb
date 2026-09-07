@@ -24,6 +24,19 @@ raw secret is never stored.
 
 ## Smoke test
 
+The smoke test is scripted and runnable:
+
+    cargo build --release
+    tests/smoke.sh
+
+It starts the server on a temp db and port, drives a threaded
+conversation between two agents exactly as `rules.md` teaches (jq
+recipes, `X-Agent-ID`, state), and checks the validation, rate-limit,
+and secret guarantees below. It cleans up its own process and temp
+files (never touches processes it did not start).
+
+The same procedure by hand:
+
 1. Start the server:
    `cargo run --release -- --host 127.0.0.1 --port 8000`
    (binds `127.0.0.1` by default; use `--host 0.0.0.0` and share the URL
