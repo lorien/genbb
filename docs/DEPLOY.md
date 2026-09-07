@@ -17,40 +17,58 @@ TLS is enabled). Fresh database — the deployed board starts empty.
 
 ## One-time setup
 
-Run the following on the server over SSH (as root where apt needs it,
-as `web` for the user service).
+The push to the server comes EARLY, because every server-side operation
+on `/web/genbb` files needs that directory to exist first — and only the
+post-receive hook (run by the push) creates it. Nothing on the server
+can be copied from `/web/genbb` before the first push.
 
-1. Build toolchain:
+Run commands on the server over SSH, or from your local clone where
+noted. Use root where apt/systemd needs it, `web` otherwise.
+
+1. Build toolchain (as root):
 
        apt install build-essential pkg-config libsqlite3-dev
        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-2. Bare repo and checkout hook:
+2. Bare repo (as root):
 
        git init --bare /web/bare/genbb
-       cp /web/genbb/deploy/post-receive /web/bare/genbb/hooks/post-receive
-       chmod +x /web/bare/genbb/hooks/post-receive
 
-   The hook checks each push out into `/web/genbb` (creating the
-   directory on the first push). Note: `post-receive` only fires when a
-   push actually updates a ref — pushing an already-up-to-date branch
-   runs nothing.
+3. Install the checkout hook — delivered FROM YOUR LOCAL MACHINE (the
+   server has no `/web/genbb` to copy from yet). `scp -p` keeps the
+   executable bit; without it git silently skips the hook:
 
-3. User service (as `web`):
+       scp -p deploy/post-receive web@genbb.org:/web/bare/genbb/hooks/post-receive
+
+4. First push (from your local clone):
+
+       git remote add server web@genbb.org:/web/bare/genbb
+       git push server main
+
+   The hook runs, creates `/web/genbb`, and checks the tree out. Only
+   now do `/web/genbb/...` paths exist on the server.
+
+5. User service (as `web`). First fix the systemd bus so
+   `systemctl --user` works over SSH (a plain SSH login lacks the
+   runtime dir), then enable lingering so the service survives logout:
 
        mkdir -p /home/web/.config/systemd/user
-       cp /web/genbb/deploy/genbb.service \
-          /home/web/.config/systemd/user/genbb.service
-       systemctl --user enable --now genbb
+       install -m 644 /web/genbb/deploy/genbb.service \
+           /home/web/.config/systemd/user/genbb.service
        loginctl enable-linger web
+       export XDG_RUNTIME_DIR=/run/user/$(id -u)
+       systemctl --user enable --now genbb
 
-   `enable-linger` makes the user service start at boot without a login
-   session.
+   Optionally symlink the hook so future pushes update it along with
+   the code:
 
-4. nginx (as root):
+       ln -sf /web/genbb/deploy/post-receive \
+              /web/bare/genbb/hooks/post-receive
 
-       cp /web/genbb/deploy/genbb.org.nginx \
-          /etc/nginx/sites-available/genbb.org.nginx
+6. nginx (as root):
+
+       install -m 644 /web/genbb/deploy/genbb.org.nginx \
+           /etc/nginx/sites-available/genbb.org.nginx
        ln -s /etc/nginx/sites-available/genbb.org.nginx \
              /etc/nginx/sites-enabled/genbb.org.nginx
        nginx -t && systemctl reload nginx
@@ -58,7 +76,13 @@ as `web` for the user service).
    The board is now reachable at http://genbb.org over HTTP (TLS lines
    in the config are commented out).
 
-5. TLS with certbot (webroot; `cli.ini` already sets
+7. Build and start (as `web`):
+
+       cd /web/genbb && cargo build --release
+       export XDG_RUNTIME_DIR=/run/user/$(id -u)
+       systemctl --user restart genbb
+
+8. TLS with certbot (webroot; `cli.ini` already sets
    `authenticator = webroot`, `webroot-path = /web`):
 
        certbot certonly -d genbb.org
@@ -68,19 +92,7 @@ as `web` for the user service).
    `systemctl reload nginx`. The redirect block keeps the webroot
    location so renewals keep working.
 
-6. First push (from your local clone):
-
-       git remote add server web@genbb.org:/web/bare/genbb
-       git push server main
-
-   The hook checks the code out into `/web/genbb`.
-
-7. First build and start (as `web`):
-
-       cd /web/genbb && cargo build --release
-       systemctl --user restart genbb
-
-8. Verify:
+9. Verify:
 
        curl -I http://genbb.org/          # or https:// after TLS
        curl -s http://genbb.org/rules
@@ -95,6 +107,7 @@ as `web` for the user service).
 2. When you want it live (as `web`):
 
        cd /web/genbb && cargo build --release
+       export XDG_RUNTIME_DIR=/run/user/$(id -u)
        systemctl --user restart genbb
 
 ## Notes
@@ -114,3 +127,9 @@ as `web` for the user service).
   `post-receive`). The hook needs `mkdir -p /web/genbb` before
   `git checkout` — git refuses to check out into a directory that does
   not exist (`fatal: this operation must be run in a work tree`).
+- `systemctl --user` says "Failed to connect to bus: Permission denied":
+  the SSH session lacks `XDG_RUNTIME_DIR`. Run
+  `export XDG_RUNTIME_DIR=/run/user/$(id -u)` first, and make sure
+  `loginctl enable-linger web` was run so the user manager persists.
+- The hook is silently skipped if it is not executable (`0644` from a
+  plain `scp`). Use `scp -p` or `chmod +x`.
