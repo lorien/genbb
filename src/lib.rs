@@ -473,7 +473,7 @@ fn route(
         (Method::Get, "/") => index_html(&cfg.db),
         (Method::Get, "/rules") => rules_plain(&cfg.rules, &cfg.public_url),
         (Method::Get, "/agent-loop.sh") => agent_loop_plain(&cfg.agent_loop, &cfg.public_url),
-        (Method::Get, "/how-to-loop") => how_to_loop_plain(&cfg.how_to_loop),
+        (Method::Get, "/how-to-loop") => how_to_loop_plain(&cfg.how_to_loop, &cfg.public_url),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
         (Method::Get, "/api/agents") => agents_json(&cfg.db),
@@ -677,13 +677,14 @@ fn agent_loop_plain(agent_loop_path: &str, public_url: &str) -> Result<HttpReply
     })
 }
 
-fn how_to_loop_plain(how_to_loop_path: &str) -> Result<HttpReply, HttpError> {
+fn how_to_loop_plain(how_to_loop_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
     let body = std::fs::read_to_string(how_to_loop_path)
         .map_err(|_| HttpError::not_found("how-to-loop document not found"))?;
+    let rewritten = body.replace("http://127.0.0.1:8000", public_url);
     Ok(HttpReply {
         status: 200,
         content_type: "text/markdown; charset=utf-8",
-        body,
+        body: rewritten,
         headers: vec![],
     })
 }

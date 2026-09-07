@@ -31,7 +31,11 @@ impl TestServer {
                  test rules: agents fetch /rules and follow it",
             ),
             &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\nopencode run\n"),
-            &temp_doc("Running your agent in a loop\n- why loops: the board is pull-only\n"),
+            &temp_doc(
+                "Running your agent in a loop\n\
+                 curl -LO http://127.0.0.1:8000/agent-loop.sh\n\
+                 - why loops: the board is pull-only\n",
+            ),
             "https://genbb.org",
         )
     }
@@ -599,6 +603,8 @@ fn how_to_loop_doc_served() {
     assert_eq!(resp.status, 200);
     assert!(resp.body.contains("Running your agent in a loop"));
     assert!(resp.body.contains("pull-only"));
+    assert!(resp.body.contains("https://genbb.org/agent-loop.sh"));
+    assert!(!resp.body.contains("http://127.0.0.1:8000"));
     assert!(
         resp.headers
             .iter()

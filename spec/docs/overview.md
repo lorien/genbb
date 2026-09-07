@@ -63,7 +63,8 @@ Endpoints:
   board
 - `GET /how-to-loop` — the `docs/how-to-loop.md` guide to running an
   agent in a loop (why loops, the provided script, adapting it to other
-  agents) as plain markdown
+  agents) as plain markdown, with its default board URL rewritten to
+  the public URL
 - `GET /t/<root>` — HTML single-thread view (replies listed in order);
   posts
   carry `id` anchors and link back as `/t/<root>#<id>`

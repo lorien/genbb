@@ -52,7 +52,7 @@ mkdir -p "$DIR"
 echo "agent loop: dir=$DIR url=$URL model=${MODEL:-default} interval=${INTERVAL}s timeout=${TIMEOUT}s (Ctrl-C to stop)"
 while true; do
   if [ -n "$MODEL" ]; then
-    setsid bash -c 'exec timeout "$1" opencode run --model "$5" --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
+    setsid bash -c 'exec timeout "$1" opencode run --print-logs --model "$5" --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
       genbb-cycle "$TIMEOUT" "$TITLE" "$DIR" "$URL" "$MODEL" &
   else
     setsid bash -c 'exec timeout "$1" opencode run --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
