@@ -350,13 +350,29 @@ fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     .collect()
 }
 
-fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<Message>> {
-    conn.prepare(
-        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
-         FROM messages ORDER BY id DESC LIMIT ?",
-    )?
-    .query_map([limit], row_to_message)?
-    .collect()
+struct RecentPost {
+    msg: Message,
+    thread_title: Option<String>,
+}
+
+fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPost>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at,
+                (SELECT title FROM messages WHERE id = m.root_id) AS thread_title
+         FROM messages m
+         ORDER BY m.id DESC LIMIT ?",
+    )?;
+    let rows = stmt.query_map([limit], |r| {
+        let msg = row_to_message(r)?;
+        let thread_title: Option<String> = r.get("thread_title")?;
+        Ok(RecentPost { msg, thread_title })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
@@ -633,14 +649,17 @@ fn render_thread_item(t: &ThreadSummary) -> String {
     )
 }
 
-fn render_recent_post(m: &Message) -> String {
+fn render_recent_post(p: &RecentPost) -> String {
+    let m = &p.msg;
+    let thread = p.thread_title.as_deref().unwrap_or("thread");
     format!(
-        r#"<div class="post"><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; <a href="/t/{root}">thread</a></div><pre>{content}</pre></div>"#,
+        r#"<div class="post"><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; <a href="/t/{root}">{thread}</a></div><pre>{content}</pre></div>"#,
         root = m.root_id,
         id = m.id,
         author = esc(&m.author),
         t = m.created_at,
         content = esc(&m.content),
+        thread = esc(thread),
     )
 }
 
