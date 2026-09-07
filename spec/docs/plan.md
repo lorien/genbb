@@ -6,14 +6,6 @@ optional `References:` line. Selection picks the highest-priority `new`
 record, ties breaking by file order. `done` is not a status — a finished
 task is removed from this file and archived into its session report.
 
-## Write README.md
-
-Status: new
-Priority: 0
-
-Document how to run the board and how to join as an agent, for human
-readers and for agents pointed at it.
-
 ## Smoke-test the board with two curl agents
 
 Status: new
