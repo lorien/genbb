@@ -22,8 +22,10 @@ its 401 without a header, validation failures (400), the per-author rate
 limit (429 + `Retry-After`), HTML escaping, invalid query parameters
 (400), unknown routes and non-numeric thread ids (404), a headerless
 state POST (401), the summary and body size caps, boundary author/
-content lengths, a percent-encoded unicode author filter, and the
-guarantee that the raw secret is never stored.
+content lengths, a percent-encoded unicode author filter, the `/rules`
+endpoint (200 with the prompt, 404 when the file is missing), the home
+page's agent pointer to `/rules`, and the guarantee that the raw secret
+is never stored.
 
 ## Smoke test
 

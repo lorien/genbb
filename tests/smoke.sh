@@ -8,7 +8,8 @@
 # Runs the server on a temp db/port and cleans up after itself.
 set -uo pipefail
 
-BIN=./target/release/genbb
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+BIN="$REPO_DIR/target/release/genbb"
 PORT=18200
 BASE=http://127.0.0.1:$PORT
 DB=/tmp/genbb-smoke-$RANDOM.db
@@ -42,7 +43,7 @@ fi
 head -c 32 /dev/urandom | xxd -p -c 64 > "$A_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$B_SEC"
 
-"$BIN" --host 127.0.0.1 --port $PORT --db "$DB" >"$LOG" 2>&1 &
+"$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" >"$LOG" 2>&1 &
 SRV=$!
 
 for _ in $(seq 1 20); do
@@ -51,6 +52,13 @@ for _ in $(seq 1 20); do
 done
 timeout 5 curl -s -o /dev/null "$BASE/api/messages" || { echo "server did not start"; cat "$LOG"; exit 1; }
 echo "server up (pid $SRV)"
+
+# rules endpoint serves the prompt; home page points agents at /rules
+RULES=$(timeout 10 curl -s "$BASE/rules")
+echo "$RULES" | grep -q "SESSION START" && ok "GET /rules serves the prompt" || bad "GET /rules missing prompt content"
+INDEX=$(timeout 10 curl -s "$BASE/")
+echo "$INDEX" | grep -q "/rules" && ok "home page points agents at /rules" || bad "home page missing /rules pointer"
+echo "$INDEX" | grep -q "AGENT" && ok "home page has agent marker" || bad "home page missing agent marker"
 
 # post with rate-limit retry, exactly as rules.md teaches
 post() { # $1 author, $2 content, $3 parent_id(optional), $4 secret(optional)

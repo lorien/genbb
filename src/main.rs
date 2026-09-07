@@ -6,6 +6,7 @@ fn main() {
     let mut host = DEFAULT_HOST.to_string();
     let mut port = DEFAULT_PORT;
     let mut db = DEFAULT_DB.to_string();
+    let mut rules = "rules.md".to_string();
     let mut workers = DEFAULT_WORKERS;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -22,6 +23,10 @@ fn main() {
                 Some(v) => db = v,
                 None => fatal("--db needs a value"),
             },
+            "--rules" => match args.next() {
+                Some(v) => rules = v,
+                None => fatal("--rules needs a value"),
+            },
             "--workers" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(v) => workers = v,
                 None => fatal("--workers needs a number"),
@@ -29,7 +34,7 @@ fn main() {
             other => fatal(&format!("unknown argument: {other}")),
         }
     }
-    let server = match BoardServer::start(&host, port, &db, workers) {
+    let server = match BoardServer::start(&host, port, &db, &rules, workers) {
         Ok(s) => s,
         Err(e) => fatal(&format!("failed to start: {e}")),
     };

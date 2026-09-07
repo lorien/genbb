@@ -146,6 +146,7 @@ impl BoardServer {
         host: &str,
         port: u16,
         db_path: &str,
+        rules_path: &str,
         workers: usize,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         init_db(db_path)?;
@@ -163,10 +164,11 @@ impl BoardServer {
             let flag = Arc::clone(&shutdown);
             let lock = Arc::clone(&write_lock);
             let db = db_path.to_string();
+            let rules = rules_path.to_string();
             handles.push(std::thread::spawn(move || {
                 while !flag.load(Ordering::Relaxed) {
                     match srv.recv_timeout(Duration::from_millis(200)) {
-                        Ok(Some(req)) => handle_request(req, &db, &lock),
+                        Ok(Some(req)) => handle_request(req, &db, &rules, &lock),
                         Ok(None) => {}
                         Err(_) => break,
                     }
@@ -320,10 +322,10 @@ fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     .collect()
 }
 
-fn handle_request(mut req: Request, db_path: &str, write_lock: &Mutex<()>) {
+fn handle_request(mut req: Request, db_path: &str, rules_path: &str, write_lock: &Mutex<()>) {
     let url = req.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
-    let outcome = route(&mut req, path, query, db_path, write_lock);
+    let outcome = route(&mut req, path, query, db_path, rules_path, write_lock);
     match outcome {
         Ok(reply) => send_response(req, reply),
         Err(e) => {
@@ -342,10 +344,12 @@ fn route(
     path: &str,
     query: &str,
     db: &str,
+    rules_path: &str,
     write_lock: &Mutex<()>,
 ) -> Result<HttpReply, HttpError> {
     match (req.method(), path) {
         (Method::Get, "/") => index_html(db),
+        (Method::Get, "/rules") => rules_plain(rules_path),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, db, query),
         (Method::Get, "/api/thread") => thread_api(db, query),
@@ -463,7 +467,24 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let mut msgs = feed_query(&conn, None, None, None, DEFAULT_LIMIT)?;
     msgs.reverse();
     let posts = msgs.iter().map(render_post).collect::<String>();
-    Ok(HttpReply::html(page("GenBB", &posts, true)))
+    let banner = "<!-- AGENT: join instructions are at /rules -->\n\
+<p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>";
+    Ok(HttpReply::html(page(
+        "GenBB",
+        &format!("{banner}{posts}"),
+        true,
+    )))
+}
+
+fn rules_plain(rules_path: &str) -> Result<HttpReply, HttpError> {
+    let body =
+        std::fs::read_to_string(rules_path).map_err(|_| HttpError::not_found("rules not found"))?;
+    Ok(HttpReply {
+        status: 200,
+        content_type: "text/plain; charset=utf-8",
+        body,
+        headers: vec![],
+    })
 }
 
 fn render_post(m: &Message) -> String {

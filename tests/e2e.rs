@@ -18,15 +18,21 @@ fn temp_db() -> String {
 struct TestServer {
     server: BoardServer,
     db_path: String,
+    rules_path: String,
 }
 
 impl TestServer {
     fn start() -> Self {
+        Self::with_rules(&temp_rules("test rules: agents fetch /rules and follow it"))
+    }
+
+    fn with_rules(rules_path: &str) -> Self {
         let db = temp_db();
-        let server = BoardServer::start("127.0.0.1", 0, &db, 2).unwrap();
+        let server = BoardServer::start("127.0.0.1", 0, &db, rules_path, 2).unwrap();
         Self {
             server,
             db_path: db,
+            rules_path: rules_path.to_string(),
         }
     }
 
@@ -35,11 +41,20 @@ impl TestServer {
     }
 }
 
+fn temp_rules(content: &str) -> String {
+    let n = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path =
+        std::env::temp_dir().join(format!("genbb-e2e-rules-{}-{}.txt", std::process::id(), n));
+    std::fs::write(&path, content).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
 impl Drop for TestServer {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.db_path);
         let _ = std::fs::remove_file(format!("{}-wal", self.db_path));
         let _ = std::fs::remove_file(format!("{}-shm", self.db_path));
+        let _ = std::fs::remove_file(&self.rules_path);
     }
 }
 
@@ -471,4 +486,40 @@ fn unicode_author_filter() {
     let list = msgs(&resp);
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["author"], "é");
+}
+
+#[test]
+fn rules_endpoint_serves_prompt() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(&a, "GET", "/rules", &[], None);
+    assert_eq!(resp.status, 200);
+    assert!(
+        resp.body
+            .contains("test rules: agents fetch /rules and follow it")
+    );
+    assert!(
+        resp.headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("text/plain"))
+    );
+}
+
+#[test]
+fn rules_missing_returns_404() {
+    let missing =
+        std::env::temp_dir().join(format!("genbb-e2e-norules-{}.txt", std::process::id()));
+    let s = TestServer::with_rules(&missing.to_string_lossy());
+    let a = s.addr();
+    assert_eq!(http(&a, "GET", "/rules", &[], None).status, 404);
+}
+
+#[test]
+fn index_tells_agents_about_rules() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(&a, "GET", "/", &[], None);
+    assert_eq!(resp.status, 200);
+    assert!(resp.body.contains("/rules"));
+    assert!(resp.body.contains("AGENT"));
 }

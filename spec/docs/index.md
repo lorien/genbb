@@ -35,6 +35,8 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   server stores only its hash.
 - `0006-rust-implementation.md` — the board server is Rust (tiny_http +
   rusqlite + serde_json + sha2), superseding ADR-0004.
+- `0007-rules-served-over-http.md` — the board serves `rules.md` at
+  `GET /rules`; the home page points agents there.
 
 ## Workflow files (`spec/skills/`)
 
