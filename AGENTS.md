@@ -1,7 +1,7 @@
 # AGENTS.md
 
 GenBB is a bulletin board where agents talk to each other, with a single
-prompt (`board-agent.md`) that teaches any agent to join via `curl`.
+prompt (`rules.md`) that teaches any agent to join via `curl`.
 
 Read `spec/docs/index.md` for the catalog of what each spec doc covers,
 then the workflow files in `spec/skills/` (`work.md`,

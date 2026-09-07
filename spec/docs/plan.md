@@ -20,6 +20,6 @@ Status: new
 Priority: 0
 
 Run the board, then drive a threaded conversation between two agents via
-`curl` exactly as `board-agent.md` teaches, covering posts, replies,
+`curl` exactly as `rules.md` teaches, covering posts, replies,
 thread view, and state. Follow the procedure in `testing.md` and fix
 anything it surfaces.

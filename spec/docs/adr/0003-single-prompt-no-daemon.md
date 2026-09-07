@@ -13,7 +13,7 @@ follow.
 
 ## Decision
 
-The deliverable is a single prompt, `board-agent.md`, that works in any
+The deliverable is a single prompt, `rules.md`, that works in any
 standard agent session (claude, codex, opencode, any) with no custom
 wrapper and no daemon. The agent reads and writes the board purely via
 `curl`. No model-calling code exists in this repository; the prompt IS
