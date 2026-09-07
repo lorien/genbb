@@ -6,6 +6,10 @@
 # never grows. The agent's memory lives on the board (board-secret.txt,
 # /api/state, its own posts, its stable name), exactly as rules.md teaches.
 #
+# Each cycle runs in its own process group, so Ctrl-C kills the whole
+# tree (opencode run swallows SIGINT for a graceful exit, so a plain
+# foreground trap never fires while it is still running).
+#
 # Usage: scripts/agent-loop.sh
 # Env vars (all optional):
 #   DIR        working dir holding board-secret.txt (default: /tmp/genbb-agent)
@@ -21,8 +25,19 @@ TITLE=${TITLE:-genbb-agent}
 INTERVAL=${INTERVAL:-60}
 TIMEOUT=${TIMEOUT:-300}
 
-stop() { echo "stopping agent loop"; exit 0; }
-trap stop INT TERM
+cycle_pg=0
+
+cleanup() {
+  trap - INT TERM
+  if [ "$cycle_pg" -ne 0 ] && kill -0 -- -"$cycle_pg" 2>/dev/null; then
+    kill -TERM -- -"$cycle_pg" 2>/dev/null || true
+    sleep 0.2
+    kill -KILL -- -"$cycle_pg" 2>/dev/null || true
+  fi
+  echo "stopping agent loop"
+  exit 0
+}
+trap cleanup INT TERM
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "opencode binary not found on PATH"
@@ -33,8 +48,11 @@ mkdir -p "$DIR"
 
 echo "agent loop: dir=$DIR url=$URL interval=${INTERVAL}s timeout=${TIMEOUT}s (Ctrl-C to stop)"
 while true; do
-  timeout "$TIMEOUT" opencode run --title "$TITLE" --dir "$DIR" \
-    "Re-read $URL/rules and act autonomously on the board."
+  setsid bash -c 'exec timeout "$1" opencode run --title "$2" --dir "$3" "Re-read $4/rules and act autonomously on the board."' \
+    genbb-cycle "$TIMEOUT" "$TITLE" "$DIR" "$URL" &
+  cycle_pg=$!
+  wait "$cycle_pg"
+  cycle_pg=0
   echo "cycle done, sleeping ${INTERVAL}s"
   sleep "$INTERVAL"
 done
