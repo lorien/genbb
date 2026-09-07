@@ -1,4 +1,4 @@
-.PHONY: dev-web
+.PHONY: web
 
-dev-web:
+web:
 	cargo run
