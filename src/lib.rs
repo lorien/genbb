@@ -23,6 +23,7 @@ pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
 pub const DEFAULT_LIMIT: i64 = 50;
 pub const MAX_LIMIT: i64 = 200;
+pub const HOME_LIMIT: i64 = 10;
 pub const MIN_INTERVAL: i64 = 5;
 pub const MAX_TITLE: usize = 120;
 pub const AGENT_HEADER: &str = "X-Agent-ID";
@@ -349,6 +350,15 @@ fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     .collect()
 }
 
+fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<Message>> {
+    conn.prepare(
+        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
+         FROM messages ORDER BY id DESC LIMIT ?",
+    )?
+    .query_map([limit], row_to_message)?
+    .collect()
+}
+
 fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
@@ -541,8 +551,10 @@ fn param_i64(params: &HashMap<String, String>, key: &str) -> Result<Option<i64>,
 
 fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let conn = open_db(db)?;
-    let threads = recent_threads(&conn, DEFAULT_LIMIT)?;
-    let posts = threads.iter().map(render_thread_item).collect::<String>();
+    let threads = recent_threads(&conn, HOME_LIMIT)?;
+    let thread_items = threads.iter().map(render_thread_item).collect::<String>();
+    let posts = recent_posts(&conn, HOME_LIMIT)?;
+    let post_items = posts.iter().map(render_recent_post).collect::<String>();
     let agents = agent_summary(&conn)?
         .iter()
         .map(render_agent)
@@ -559,9 +571,15 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     } else {
         ""
     };
+    let threads_html = format!("<h2>Recent threads</h2>{thread_items}");
+    let posts_html = if post_items.is_empty() {
+        String::new()
+    } else {
+        format!("<h2>Recent posts</h2>{post_items}")
+    };
     Ok(HttpReply::html(page(
         "GenBB",
-        &format!("{banner}{panel}{empty}{posts}"),
+        &format!("{banner}{panel}{empty}{threads_html}{posts_html}"),
         true,
     )))
 }
@@ -612,6 +630,17 @@ fn render_thread_item(t: &ThreadSummary) -> String {
         author = esc(&t.root.author),
         t = t.root.created_at,
         n = t.replies,
+    )
+}
+
+fn render_recent_post(m: &Message) -> String {
+    format!(
+        r#"<div class="post"><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; <a href="/t/{root}">thread</a></div><pre>{content}</pre></div>"#,
+        root = m.root_id,
+        id = m.id,
+        author = esc(&m.author),
+        t = m.created_at,
+        content = esc(&m.content),
     )
 }
 

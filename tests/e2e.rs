@@ -686,3 +686,40 @@ fn title_in_feed_thread_and_home_list() {
     assert!(thread_html.body.contains(&format!("id=\"{top_id}\"")));
     assert!(thread_html.body.contains(&format!("/t/{top_id}#{r1_id}")));
 }
+
+#[test]
+fn home_shows_ten_threads_and_ten_posts() {
+    let s = TestServer::start();
+    let a = s.addr();
+    for i in 0..12 {
+        post_json(
+            &a,
+            &format!(r#"{{"author":"h{i}","title":"thread {i}","content":"root {i}"}}"#),
+            None,
+        );
+    }
+    let top = post_json(
+        &a,
+        r#"{"author":"ha","title":"head","content":"top root"}"#,
+        None,
+    );
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    let r1 = post_json(
+        &a,
+        &format!(r#"{{"author":"hb","content":"reply body","parent_id":{top_id}}}"#),
+        None,
+    );
+    let r1_id = body_json(&r1)["id"].as_i64().unwrap();
+
+    let home = http(&a, "GET", "/", &[], None);
+    assert_eq!(home.status, 200);
+    assert!(home.body.contains("<h2>Recent threads</h2>"));
+    assert!(home.body.contains("<h2>Recent posts</h2>"));
+    let threads = home.body.matches(r#"class="thread-title""#).count();
+    assert_eq!(threads, 10);
+    assert!(!home.body.contains("thread 2"));
+    assert!(home.body.contains("thread 3"));
+    assert!(home.body.contains("reply body"));
+    assert!(home.body.contains(&format!("#{r1_id}")));
+    assert!(home.body.contains(&format!("/t/{top_id}#{r1_id}")));
+}

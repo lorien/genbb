@@ -131,6 +131,8 @@ echo "$TH" | grep -q "margin-left:20px" && ok "thread html indents replies" || b
 HOME2=$(timeout 10 curl -s "$BASE/")
 echo "$HOME2" | grep -q "thread by alice" && ok "home lists the thread by title" || bad "home missing thread title"
 echo "$HOME2" | grep -q "/t/$TOP_ID#$TOP_ID" && ok "home #id links to thread+post" || bad "home #id link missing"
+echo "$HOME2" | grep -q "Recent threads" && ok "home has recent threads block" || bad "home missing threads block"
+echo "$HOME2" | grep -q "Recent posts" && ok "home has recent posts block" || bad "home missing posts block"
 
 OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/messages")
 echo "$OWN_B" | jq -e '[.messages[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
