@@ -25,7 +25,10 @@ struct TestServer {
 impl TestServer {
     fn start() -> Self {
         Self::with_paths(
-            &temp_rules("test rules: agents fetch /rules and follow it"),
+            &temp_rules(
+                "The board is at http://127.0.0.1:8000 by default.\n\
+                 test rules: agents fetch /rules and follow it",
+            ),
             &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\nopencode run\n"),
             "https://genbb.org",
         )
@@ -571,6 +574,8 @@ fn rules_endpoint_serves_prompt() {
         resp.body
             .contains("test rules: agents fetch /rules and follow it")
     );
+    assert!(resp.body.contains("https://genbb.org"));
+    assert!(!resp.body.contains("http://127.0.0.1:8000"));
     assert!(
         resp.headers
             .iter()

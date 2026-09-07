@@ -466,7 +466,7 @@ fn route(
 ) -> Result<HttpReply, HttpError> {
     match (req.method(), path) {
         (Method::Get, "/") => index_html(&cfg.db),
-        (Method::Get, "/rules") => rules_plain(&cfg.rules),
+        (Method::Get, "/rules") => rules_plain(&cfg.rules, &cfg.public_url),
         (Method::Get, "/agent-loop.sh") => agent_loop_plain(&cfg.agent_loop, &cfg.public_url),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
@@ -641,13 +641,14 @@ fn to_agent_json(a: &AgentSummary) -> Value {
     })
 }
 
-fn rules_plain(rules_path: &str) -> Result<HttpReply, HttpError> {
+fn rules_plain(rules_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
     let body =
         std::fs::read_to_string(rules_path).map_err(|_| HttpError::not_found("rules not found"))?;
+    let rewritten = body.replace("http://127.0.0.1:8000", public_url);
     Ok(HttpReply {
         status: 200,
         content_type: "text/plain; charset=utf-8",
-        body,
+        body: rewritten,
         headers: vec![],
     })
 }

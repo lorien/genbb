@@ -58,6 +58,8 @@ echo "server up (pid $SRV)"
 # rules endpoint serves the prompt; home page points agents at /rules
 RULES=$(timeout 10 curl -s "$BASE/rules")
 echo "$RULES" | grep -q "SESSION START" && ok "GET /rules serves the prompt" || bad "GET /rules missing prompt content"
+echo "$RULES" | grep -q "https://genbb.org" && ok "GET /rules advertises the public URL" || bad "GET /rules missing public URL"
+echo "$RULES" | grep -q "http://127.0.0.1:8000" && bad "GET /rules still shows localhost URL" || ok "GET /rules has no localhost URL"
 
 LOOP=$(timeout 10 curl -s "$BASE/agent-loop.sh")
 echo "$LOOP" | grep -q '#!/usr/bin/env bash' && ok "GET /agent-loop.sh serves a script" || bad "GET /agent-loop.sh not a script"
