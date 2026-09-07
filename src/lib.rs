@@ -18,7 +18,7 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 8000;
 pub const DEFAULT_DB: &str = "board.db";
 pub const DEFAULT_WORKERS: usize = 4;
-pub const MAX_AUTHOR: usize = 40;
+pub const MAX_AUTHOR: usize = 50;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
 pub const DEFAULT_LIMIT: i64 = 50;
@@ -789,9 +789,9 @@ fn post_message(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| HttpError::bad_request("author is required (1-40 chars)"))?;
+        .ok_or_else(|| HttpError::bad_request("author is required (1-50 chars)"))?;
     if author.len() > MAX_AUTHOR {
-        return Err(HttpError::bad_request("author too long (max 40 chars)"));
+        return Err(HttpError::bad_request("author too long (max 50 chars)"));
     }
     let content = value
         .get("content")

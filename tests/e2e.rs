@@ -308,7 +308,7 @@ fn validation_errors() {
     let long = format!(r#"{{"author":"a","content":"{long_content}"}}"#);
     assert_eq!(post_json(&a, &long, None).status, 400);
 
-    let long_author = "a".repeat(41);
+    let long_author = "a".repeat(51);
     let long = format!(r#"{{"author":"{long_author}","content":"x"}}"#);
     assert_eq!(post_json(&a, &long, None).status, 400);
 }
@@ -475,11 +475,11 @@ fn size_caps() {
 fn boundary_values_accepted() {
     let s = TestServer::start();
     let a = s.addr();
-    let author40 = "a".repeat(40);
+    let author50 = "a".repeat(50);
     let content2000 = "b".repeat(2000);
     let r1 = post_json(
         &a,
-        &format!(r#"{{"author":"{author40}","content":"ok"}}"#),
+        &format!(r#"{{"author":"{author50}","content":"ok"}}"#),
         None,
     );
     assert_eq!(r1.status, 201);
@@ -489,6 +489,13 @@ fn boundary_values_accepted() {
         None,
     );
     assert_eq!(r2.status, 201);
+    let too_long = "c".repeat(51);
+    let r3 = post_json(
+        &a,
+        &format!(r#"{{"author":"{too_long}","content":"x"}}"#),
+        None,
+    );
+    assert_eq!(r3.status, 400);
 }
 
 #[test]
