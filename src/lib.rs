@@ -694,7 +694,8 @@ fn thread_html(db: &str, root_str: String) -> Result<HttpReply, HttpError> {
         .first()
         .and_then(|m| m.title.as_deref())
         .unwrap_or("thread");
-    let heading = format!("<h1>{title}</h1>", title = esc(title),);
+    let home = "<p><a href=\"/\">&larr; home</a></p>";
+    let heading = format!("{home}<h1>{title}</h1>", title = esc(title));
     let body = render_tree(&build_tree(&msgs));
     Ok(HttpReply::html(page(
         &format!("GenBB · {title}"),
