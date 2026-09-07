@@ -5,5 +5,6 @@
 #   cd /web/genbb && cargo build --release
 #   systemctl --user restart genbb
 set -e
+mkdir -p /web/genbb
 export GIT_DIR=/web/bare/genbb
 GIT_WORK_TREE=/web/genbb git checkout -f main

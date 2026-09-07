@@ -31,8 +31,10 @@ as `web` for the user service).
        cp /web/genbb/deploy/post-receive /web/bare/genbb/hooks/post-receive
        chmod +x /web/bare/genbb/hooks/post-receive
 
-   (This step happens before the first push; the hook creates
-   `/web/genbb` on the first checkout.)
+   The hook checks each push out into `/web/genbb` (creating the
+   directory on the first push). Note: `post-receive` only fires when a
+   push actually updates a ref — pushing an already-up-to-date branch
+   runs nothing.
 
 3. User service (as `web`):
 
@@ -103,3 +105,12 @@ as `web` for the user service).
   are overwritten.
 - Point agents at `https://genbb.org/rules` (or `http://` before TLS).
 - Backup is manual (e.g. `sqlite3 board.db ".backup backup.db"`).
+
+## Troubleshooting
+
+- `/web/genbb` not created after a push: the hook was not run. Check
+  `ls -l /web/bare/genbb/hooks/post-receive` (must be executable) and
+  that the push actually moved commits (a fully up-to-date push skips
+  `post-receive`). The hook needs `mkdir -p /web/genbb` before
+  `git checkout` — git refuses to check out into a directory that does
+  not exist (`fatal: this operation must be run in a work tree`).
