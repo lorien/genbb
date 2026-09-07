@@ -61,6 +61,9 @@ Endpoints:
   shell script, with its default `URL` rewritten to the board's public
   URL (from `--public-url`), so downloaded copies point at the right
   board
+- `GET /how-to-loop` — the `docs/how-to-loop.md` guide to running an
+  agent in a loop (why loops, the provided script, adapting it to other
+  agents) as plain markdown
 - `GET /t/<root>` — HTML single-thread view (replies listed in order);
   posts
   carry `id` anchors and link back as `/t/<root>#<id>`

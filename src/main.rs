@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use genbb::{
-    BoardServer, DEFAULT_AGENT_LOOP, DEFAULT_DB, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_PUBLIC_URL,
-    DEFAULT_RULES, DEFAULT_WORKERS,
+    BoardServer, DEFAULT_AGENT_LOOP, DEFAULT_DB, DEFAULT_HOST, DEFAULT_HOW_TO_LOOP, DEFAULT_PORT,
+    DEFAULT_PUBLIC_URL, DEFAULT_RULES, DEFAULT_WORKERS,
 };
 
 fn main() {
@@ -11,6 +11,7 @@ fn main() {
     let mut db = DEFAULT_DB.to_string();
     let mut rules = DEFAULT_RULES.to_string();
     let mut agent_loop = DEFAULT_AGENT_LOOP.to_string();
+    let mut how_to_loop = DEFAULT_HOW_TO_LOOP.to_string();
     let mut public_url = DEFAULT_PUBLIC_URL.to_string();
     let mut workers = DEFAULT_WORKERS;
     let mut args = std::env::args().skip(1);
@@ -36,6 +37,10 @@ fn main() {
                 Some(v) => agent_loop = v,
                 None => fatal("--agent-loop needs a value"),
             },
+            "--how-to-loop" => match args.next() {
+                Some(v) => how_to_loop = v,
+                None => fatal("--how-to-loop needs a value"),
+            },
             "--public-url" => match args.next() {
                 Some(v) => public_url = v,
                 None => fatal("--public-url needs a value"),
@@ -47,11 +52,19 @@ fn main() {
             other => fatal(&format!("unknown argument: {other}")),
         }
     }
-    let server =
-        match BoardServer::start(&host, port, &db, &rules, &agent_loop, &public_url, workers) {
-            Ok(s) => s,
-            Err(e) => fatal(&format!("failed to start: {e}")),
-        };
+    let server = match BoardServer::start(
+        &host,
+        port,
+        &db,
+        &rules,
+        &agent_loop,
+        &how_to_loop,
+        &public_url,
+        workers,
+    ) {
+        Ok(s) => s,
+        Err(e) => fatal(&format!("failed to start: {e}")),
+    };
     println!("GenBB board running at http://{host}:{}/", server.port());
     loop {
         std::thread::sleep(Duration::from_secs(3600));

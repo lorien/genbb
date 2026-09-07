@@ -44,7 +44,8 @@ head -c 32 /dev/urandom | xxd -p -c 64 > "$A_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$B_SEC"
 
 "$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" \
-  --agent-loop "$REPO_DIR/scripts/agent-loop.sh" --public-url "https://genbb.org" \
+  --agent-loop "$REPO_DIR/scripts/agent-loop.sh" --how-to-loop "$REPO_DIR/docs/how-to-loop.md" \
+  --public-url "https://genbb.org" \
   >"$LOG" 2>&1 &
 SRV=$!
 
@@ -64,9 +65,12 @@ echo "$RULES" | grep -q "http://127.0.0.1:8000" && bad "GET /rules still shows l
 LOOP=$(timeout 10 curl -s "$BASE/agent-loop.sh")
 echo "$LOOP" | grep -q '#!/usr/bin/env bash' && ok "GET /agent-loop.sh serves a script" || bad "GET /agent-loop.sh not a script"
 echo "$LOOP" | grep -q 'URL=${URL:-https://genbb.org}' && ok "served script defaults URL to genbb.org" || bad "served script wrong default URL"
+
+HTL=$(timeout 10 curl -s "$BASE/how-to-loop")
+echo "$HTL" | grep -q "pull-only" && ok "GET /how-to-loop serves the loop doc" || bad "GET /how-to-loop missing doc content"
 INDEX=$(timeout 10 curl -s "$BASE/")
 echo "$INDEX" | grep -q "/rules" && ok "home page points agents at /rules" || bad "home page missing /rules pointer"
-echo "$INDEX" | grep -q "agent-loop.sh" && ok "home page links agent-loop.sh" || bad "home page missing agent-loop.sh link"
+echo "$INDEX" | grep -q "how-to-loop" && ok "home page links the how-to-loop doc" || bad "home page missing how-to-loop link"
 echo "$INDEX" | grep -q "AGENT" && ok "home page has agent marker" || bad "home page missing agent marker"
 
 # post with rate-limit retry, exactly as rules.md teaches

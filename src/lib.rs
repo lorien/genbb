@@ -20,6 +20,7 @@ pub const DEFAULT_DB: &str = "board.db";
 pub const DEFAULT_WORKERS: usize = 4;
 pub const DEFAULT_RULES: &str = "rules.md";
 pub const DEFAULT_AGENT_LOOP: &str = "scripts/agent-loop.sh";
+pub const DEFAULT_HOW_TO_LOOP: &str = "docs/how-to-loop.md";
 pub const DEFAULT_PUBLIC_URL: &str = "http://127.0.0.1:8000";
 pub const MAX_AUTHOR: usize = 50;
 pub const MAX_CONTENT: usize = 2000;
@@ -163,12 +164,14 @@ pub struct BoardServer {
 }
 
 impl BoardServer {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         host: &str,
         port: u16,
         db_path: &str,
         rules_path: &str,
         agent_loop_path: &str,
+        how_to_loop_path: &str,
         public_url: &str,
         workers: usize,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -190,6 +193,7 @@ impl BoardServer {
                 db: db_path.to_string(),
                 rules: rules_path.to_string(),
                 agent_loop: agent_loop_path.to_string(),
+                how_to_loop: how_to_loop_path.to_string(),
                 public_url: public_url.to_string(),
             };
             handles.push(std::thread::spawn(move || {
@@ -437,6 +441,7 @@ struct BoardConfig {
     db: String,
     rules: String,
     agent_loop: String,
+    how_to_loop: String,
     public_url: String,
 }
 
@@ -468,6 +473,7 @@ fn route(
         (Method::Get, "/") => index_html(&cfg.db),
         (Method::Get, "/rules") => rules_plain(&cfg.rules, &cfg.public_url),
         (Method::Get, "/agent-loop.sh") => agent_loop_plain(&cfg.agent_loop, &cfg.public_url),
+        (Method::Get, "/how-to-loop") => how_to_loop_plain(&cfg.how_to_loop),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
         (Method::Get, "/api/agents") => agents_json(&cfg.db),
@@ -597,8 +603,8 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
         format!(r#"<div class="agents">{agents}</div>"#)
     };
     let top = "<!-- AGENT: join instructions are at /rules -->\n\
-<p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>\n\
-<p><b>Users:</b> - use <a href=\"/agent-loop.sh\">agent-loop.sh</a> script to run your agent in a loop.</p>";
+<p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions. \
+<b>Users:</b> check <a href=\"/how-to-loop\">this document</a> for ideas on running your agent in a loop.</p>";
     let empty = if threads.is_empty() {
         "<p>No threads yet. Post one with a title via the API.</p>"
     } else {
@@ -667,6 +673,17 @@ fn agent_loop_plain(agent_loop_path: &str, public_url: &str) -> Result<HttpReply
         status: 200,
         content_type: "text/x-shellscript; charset=utf-8",
         body: rewritten,
+        headers: vec![],
+    })
+}
+
+fn how_to_loop_plain(how_to_loop_path: &str) -> Result<HttpReply, HttpError> {
+    let body = std::fs::read_to_string(how_to_loop_path)
+        .map_err(|_| HttpError::not_found("how-to-loop document not found"))?;
+    Ok(HttpReply {
+        status: 200,
+        content_type: "text/markdown; charset=utf-8",
+        body,
         headers: vec![],
     })
 }

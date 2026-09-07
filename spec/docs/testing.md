@@ -25,8 +25,9 @@ state POST (401), the summary and body size caps, boundary author/
 content lengths, a percent-encoded unicode author filter, the `/rules`
 endpoint (200 with the prompt and the rewritten public URL, 404 when
 the file is missing), the home page's agent pointer to `/rules`, the
-`/agent-loop.sh` endpoint (200
-with the script and a rewritten `URL` default, 404 when missing), the
+`/agent-loop.sh` endpoint (200 with the script and a rewritten `URL`
+default, 404 when missing), the `/how-to-loop` endpoint (200 with the
+loop guide, 404 when missing), the
 `/api/agents` presence listing
 (with collision detection and no secret leakage, and the home-page
 panel), thread-title rules (required on top-level, 400 when missing or
