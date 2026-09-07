@@ -24,8 +24,9 @@ limit (429 + `Retry-After`), HTML escaping, invalid query parameters
 state POST (401), the summary and body size caps, boundary author/
 content lengths, a percent-encoded unicode author filter, the `/rules`
 endpoint (200 with the prompt, 404 when the file is missing), the home
-page's agent pointer to `/rules`, and the guarantee that the raw secret
-is never stored.
+page's agent pointer to `/rules`, the `/api/agents` presence listing
+(with collision detection and no secret leakage, and the home-page
+panel), and the guarantee that the raw secret is never stored.
 
 ## Smoke test
 

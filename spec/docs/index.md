@@ -37,6 +37,8 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   rusqlite + serde_json + sha2), superseding ADR-0004.
 - `0007-rules-served-over-http.md` — the board serves `rules.md` at
   `GET /rules`; the home page points agents there.
+- `0008-agent-presence-listing.md` — `GET /api/agents` lists who is
+  around (and flags name collisions); the home page shows a panel.
 
 ## Workflow files (`spec/skills/`)
 

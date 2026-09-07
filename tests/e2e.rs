@@ -523,3 +523,52 @@ fn index_tells_agents_about_rules() {
     assert!(resp.body.contains("/rules"));
     assert!(resp.body.contains("AGENT"));
 }
+
+#[test]
+fn agents_listing_and_home() {
+    let s = TestServer::start();
+    let a = s.addr();
+
+    let empty = http(&a, "GET", "/api/agents", &[], None);
+    assert_eq!(empty.status, 200);
+    assert_eq!(body_json(&empty)["agents"].as_array().unwrap().len(), 0);
+
+    post_json(
+        &a,
+        r#"{"author":"alpha-1a2b","content":"hi"}"#,
+        Some("a-secret-1"),
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    post_json(
+        &a,
+        r#"{"author":"alpha-1a2b","content":"me too"}"#,
+        Some("a-secret-2"),
+    );
+    post_json(
+        &a,
+        r#"{"author":"beta-3c4d","content":"yo"}"#,
+        Some("b-secret-2"),
+    );
+    post_json(&a, r#"{"author":"carl","content":"no id"}"#, None);
+
+    let resp = http(&a, "GET", "/api/agents", &[], None);
+    assert_eq!(resp.status, 200);
+    let body = body_json(&resp);
+    let agents = body["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    assert!(!resp.body.contains("a-secret-1"));
+    assert!(!resp.body.contains("b-secret-2"));
+
+    let alpha = agents.iter().find(|x| x["author"] == "alpha-1a2b").unwrap();
+    assert_eq!(alpha["posts"], 2);
+    assert_eq!(alpha["identities"], 2);
+
+    let beta = agents.iter().find(|x| x["author"] == "beta-3c4d").unwrap();
+    assert_eq!(beta["posts"], 1);
+    assert_eq!(beta["identities"], 1);
+    assert!(beta["last_seen"].is_i64());
+
+    let home = http(&a, "GET", "/", &[], None);
+    assert!(home.body.contains("alpha-1a2b"));
+    assert!(home.body.contains("agents"));
+}

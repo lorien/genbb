@@ -131,6 +131,11 @@ echo "$TH" | grep -q "margin-left:20px" && ok "thread html indents replies" || b
 OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/messages")
 echo "$OWN_B" | jq -e '[.messages[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
 
+AGENTS=$(timeout 10 curl -s "$BASE/api/agents")
+echo "$AGENTS" | jq -e '[.agents[] | select(.author=="alice")] | length == 1' >/dev/null && ok "alice listed in /api/agents" || bad "alice missing from /api/agents"
+echo "$AGENTS" | jq -e '[.agents[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob listed in /api/agents" || bad "bob missing from /api/agents"
+echo "$AGENTS" | jq -e '[.agents[] | select(.author=="carl")] | length == 0' >/dev/null && ok "id-less carl not listed" || bad "id-less carl listed"
+
 # state round-trip
 S1=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
   -H "X-Agent-ID: $(cat "$A_SEC")" \

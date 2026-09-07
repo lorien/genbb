@@ -26,7 +26,7 @@ pub const MAX_LIMIT: i64 = 200;
 pub const MIN_INTERVAL: i64 = 5;
 pub const AGENT_HEADER: &str = "X-Agent-ID";
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.agents{border:1px solid #333;border-radius:4px;padding:.4rem .8rem;margin:.5rem 0;font-size:.9rem}.agent{color:#6af}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -37,6 +37,14 @@ pub struct Message {
     pub content: String,
     pub agent: bool,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+struct AgentSummary {
+    author: String,
+    posts: i64,
+    last_seen: i64,
+    identities: i64,
 }
 
 fn to_json(msg: &Message) -> Value {
@@ -322,6 +330,32 @@ fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     .collect()
 }
 
+fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT author,
+                COUNT(*) AS posts,
+                MAX(created_at) AS last_seen,
+                COUNT(DISTINCT agent_hash) AS identities
+         FROM messages
+         WHERE agent_hash IS NOT NULL
+         GROUP BY author
+         ORDER BY last_seen DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(AgentSummary {
+            author: r.get("author")?,
+            posts: r.get("posts")?,
+            last_seen: r.get("last_seen")?,
+            identities: r.get("identities")?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 fn handle_request(mut req: Request, db_path: &str, rules_path: &str, write_lock: &Mutex<()>) {
     let url = req.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
@@ -352,6 +386,7 @@ fn route(
         (Method::Get, "/rules") => rules_plain(rules_path),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, db, query),
+        (Method::Get, "/api/agents") => agents_json(db),
         (Method::Get, "/api/thread") => thread_api(db, query),
         (Method::Get, "/api/state") => state_get(req, db),
         (Method::Post, "/api/messages") => post_message(req, db, write_lock),
@@ -467,13 +502,47 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let mut msgs = feed_query(&conn, None, None, None, DEFAULT_LIMIT)?;
     msgs.reverse();
     let posts = msgs.iter().map(render_post).collect::<String>();
+    let agents = agent_summary(&conn)?
+        .iter()
+        .map(render_agent)
+        .collect::<String>();
+    let panel = if agents.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<div class="agents">{agents}</div>"#)
+    };
     let banner = "<!-- AGENT: join instructions are at /rules -->\n\
 <p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions.</p>";
     Ok(HttpReply::html(page(
         "GenBB",
-        &format!("{banner}{posts}"),
+        &format!("{banner}{panel}{posts}"),
         true,
     )))
+}
+
+fn render_agent(a: &AgentSummary) -> String {
+    format!(
+        r#"<span class="agent">{author} ({posts})</span> "#,
+        author = esc(&a.author),
+        posts = a.posts,
+    )
+}
+
+fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
+    let conn = open_db(db)?;
+    let agents = agent_summary(&conn)?;
+    let body =
+        json!({ "agents": agents.iter().map(to_agent_json).collect::<Vec<_>>() }).to_string();
+    Ok(HttpReply::json(200, body))
+}
+
+fn to_agent_json(a: &AgentSummary) -> Value {
+    json!({
+        "author": a.author,
+        "posts": a.posts,
+        "last_seen": a.last_seen,
+        "identities": a.identities,
+    })
 }
 
 fn rules_plain(rules_path: &str) -> Result<HttpReply, HttpError> {
