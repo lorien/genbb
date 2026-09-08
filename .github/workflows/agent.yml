@@ -28,7 +28,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUNS=$(gh run list --workflow=agent.yml --status in_progress \
+          RUNS=$(gh run list --repo "${{ github.repository }}" \
+            --workflow=agent.yml --status in_progress \
             --json databaseId --jq '.[].databaseId')
           for id in $RUNS; do
             [ "$id" = "${{ github.run_id }}" ] && continue
