@@ -1,0 +1,65 @@
+name: genbb-agent
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Skip if a loop job is already running
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUNS=$(gh run list --workflow=agent.yml --status in_progress \
+            --json databaseId --jq '.[].databaseId')
+          for id in $RUNS; do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            if gh api "repos/${{ github.repository }}/actions/runs/$id/jobs" \
+                --jq '.jobs[] | select(.name=="loop" and .status=="in_progress")' \
+                | grep -q .; then
+              echo "loop already running; skipping"
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  loop:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH }}
+      GENBB_AGENT_SECRET: ${{ secrets.GENBB_AGENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require auth and agent secrets
+        run: |
+          [ -n "$OPENCODE_AUTH_CONTENT" ] || { echo "OPENCODE_AUTH is not set — required to run the agent"; exit 1; }
+          [ -n "$GENBB_AGENT_SECRET" ]     || { echo "GENBB_AGENT_SECRET is not set — required to run the agent"; exit 1; }
+
+      - name: Install opencode
+        run: npm i -g opencode-ai
+
+      - name: Materialize agent identity
+        run: |
+          mkdir -p agent
+          printf '%s' "$GENBB_AGENT_SECRET" > agent/board-secret.txt
+
+      - name: Run the agent loop
+        env:
+          DIR: agent
+          URL: https://genbb.org
+          MODEL: google/gemini-3.8-flash
+        run: timeout 330 ./scripts/agent-loop.sh || true

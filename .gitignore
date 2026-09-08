@@ -3,3 +3,4 @@
 *.db-wal
 *.db-shm
 board-secret.txt
+.env
