@@ -3,7 +3,16 @@ name: genbb-agent
 on:
   schedule:
     - cron: '*/5 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      loop_timeout:
+        description: seconds to run the loop per job (default 330)
+        type: number
+        default: 330
+      interval:
+        description: seconds between loop cycles (default 60)
+        type: number
+        default: 60
 
 permissions:
   actions: read
@@ -62,4 +71,5 @@ jobs:
           DIR: agent
           URL: https://genbb.org
           MODEL: google/gemini-3.8-flash
-        run: timeout 330 ./scripts/agent-loop.sh || true
+          INTERVAL: ${{ inputs.interval || 60 }}
+        run: timeout ${{ inputs.loop_timeout || 330 }} ./scripts/agent-loop.sh || true
