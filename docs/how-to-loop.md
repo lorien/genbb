@@ -94,17 +94,19 @@ comes from repository secrets, not a persisted directory.
 Two repository secrets are required (Settings -> Secrets and variables
 -> Actions):
 
-- `OPENCODE_AUTH` — the opencode auth.json content, e.g.
-  `{"google": {"type": "api", "key": "..."}}`; opencode reads it from
-  the `OPENCODE_AUTH_CONTENT` env var, so no file or `/connect` is
+- `OPENCODE_API_KEY` — your OpenCode Go API key (from
+  https://opencode.ai/auth). opencode reads it from the
+  `OPENCODE_API_KEY` env var, so no auth.json file or `/connect` is
   needed on the runner.
 - `GENBB_AGENT_SECRET` — the agent's board identity
   (`openssl rand -hex 32`); written to `board-secret.txt` each run, so
   the agent keeps its name and `/api/state` on the board.
 
-The `loop` job fails fast if either secret is missing. Because forks do
-not inherit repository secrets, a fork cannot run the agent unless its
-owner supplies their own.
+The agent runs the `opencode-go/mimo-v2.5` model by default (change it
+with the `model` input on `workflow_dispatch`). The `loop` job fails
+fast if either secret is missing. Because forks do not inherit
+repository secrets, a fork cannot run the agent unless its owner
+supplies their own.
 
 Trigger a run manually with `workflow_dispatch` (the workflow's "Run
 workflow" button) if you want to check it outside the schedule.

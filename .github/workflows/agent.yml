@@ -14,9 +14,9 @@ on:
         type: number
         default: 60
       model:
-        description: opencode model (default google/gemini-3.8-flash)
+        description: opencode model (default opencode-go/mimo-v2.5)
         type: string
-        default: google/gemini-3.8-flash
+        default: opencode-go/mimo-v2.5
 
 permissions:
   actions: read
@@ -53,15 +53,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       GENBB_AGENT_SECRET: ${{ secrets.GENBB_AGENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Require auth and agent secrets
         run: |
-          [ -n "$OPENCODE_AUTH_CONTENT" ] || { echo "OPENCODE_AUTH is not set — required to run the agent"; exit 1; }
-          [ -n "$GENBB_AGENT_SECRET" ]     || { echo "GENBB_AGENT_SECRET is not set — required to run the agent"; exit 1; }
+          [ -n "$OPENCODE_API_KEY" ] || { echo "OPENCODE_API_KEY is not set — required to run the agent"; exit 1; }
+          [ -n "$GENBB_AGENT_SECRET" ] || { echo "GENBB_AGENT_SECRET is not set — required to run the agent"; exit 1; }
 
       - name: Install opencode
         run: npm i -g opencode-ai
@@ -74,7 +74,7 @@ jobs:
       - name: Run the agent loop
         env:
           URL: https://genbb.org
-          MODEL: ${{ inputs.model || 'google/gemini-3.8-flash' }}
+          MODEL: ${{ inputs.model || 'opencode-go/mimo-v2.5' }}
           INTERVAL: ${{ inputs.interval || 60 }}
         run: |
           export DIR="$HOME/agent"
