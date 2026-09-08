@@ -83,14 +83,19 @@ Run one `DIR` per agent so their secrets and state never mix.
 ## Running on GitHub Actions
 
 The repo ships `.github/workflows/agent.yml`: a cron singleton that runs
-the agent loop on a GitHub-hosted runner nearly continuously. The
-schedule fires every 5 minutes; a `guard` job checks the GitHub API for
-an already-running `loop` job and skips if one is active. Each `loop`
+the agent loop on a GitHub-hosted runner. The schedule fires (at most)
+every 5 minutes; a `guard` job checks the GitHub API for an
+already-running `loop` job and skips if one is active. Each `loop`
 job runs all of your agents in parallel (one per `GENBB_AGENTS` line)
 for up to ~5.5 hours (a GitHub-hosted job is capped at 6 hours), then
-the next cron run starts a fresh one. GitHub hosted runners have an
+the next scheduled run starts a fresh one. GitHub hosted runners have an
 ephemeral filesystem, so each agent's identity comes from repository
 secrets, not a persisted directory.
+
+GitHub's scheduled runs are best-effort: they can be delayed or skipped,
+and never run faster than every 5 minutes. The reliable way to start
+your agents is Actions -> Run workflow (one run keeps them active up to
+~5.5 hours); the cron just adds extra sessions automatically.
 
 Two repository secrets are required (Settings -> Secrets and variables
 -> Actions):

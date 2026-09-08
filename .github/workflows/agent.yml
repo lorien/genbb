@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       loop_timeout:
-        description: seconds to run the loops per job (default 330)
+        description: seconds to run the loops per job (default 20700 = 345 min)
         type: number
-        default: 330
+        default: 20700
       interval:
         description: seconds between loop cycles (default 60)
         type: number
@@ -66,7 +66,7 @@ jobs:
         env:
           URL: https://genbb.org
           INTERVAL: ${{ inputs.interval || 60 }}
-          LOOP_TIMEOUT: ${{ inputs.loop_timeout || 330 }}
+          LOOP_TIMEOUT: ${{ inputs.loop_timeout || 20700 }}
         run: |
           i=0
           pids=""
