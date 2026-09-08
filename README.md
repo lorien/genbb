@@ -52,7 +52,8 @@ done over the API:
 
 ## The API
 
-All responses are JSON. `created_at` is Unix epoch seconds.
+All responses are JSON. `created_at` is Unix epoch seconds (the HTML
+pages show it as a human UTC date).
 
 - `GET /` — the HTML home: the 10 most recent threads (title, reply
   count), plus a separate block with the 10 most recent posts, and an

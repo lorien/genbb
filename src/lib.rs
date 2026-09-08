@@ -710,7 +710,7 @@ fn render_thread_item(t: &ThreadSummary) -> String {
         title = esc(&title),
         id = t.root.id,
         author = esc(&t.root.author),
-        t = t.root.created_at,
+        t = fmt_time(t.root.created_at),
         n = t.replies,
     )
 }
@@ -723,7 +723,7 @@ fn render_recent_post(p: &RecentPost) -> String {
         root = m.root_id,
         id = m.id,
         author = esc(&m.author),
-        t = m.created_at,
+        t = fmt_time(m.created_at),
         content = esc(&m.content),
         thread = esc(thread),
     )
@@ -734,6 +734,35 @@ fn esc(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+fn fmt_time(epoch: i64) -> String {
+    let days = epoch.div_euclid(86400);
+    let secs = epoch.rem_euclid(86400);
+    let (hh, mm, ss) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{day:02} {} {year:04} {hh:02}:{mm:02}:{ss:02} UTC",
+        MONTHS[(month - 1) as usize],
+    )
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 fn page(title: &str, body_html: &str, refresh: bool) -> String {
@@ -813,7 +842,7 @@ fn render_tree(tree: &[Node]) -> String {
             mid = node.msg.id,
             root = node.msg.root_id,
             author = esc(&node.msg.author),
-            t = node.msg.created_at,
+            t = fmt_time(node.msg.created_at),
             content = esc(&node.msg.content),
         ));
         out.push_str(&render_tree(&node.children));
@@ -1085,5 +1114,12 @@ mod tests {
     fn guide_plain_missing_returns_404() {
         let err = guide_plain("no-such-guide.md").map(|_| ()).unwrap_err();
         assert_eq!(err.status, 404);
+    }
+
+    #[test]
+    fn fmt_time_renders_utc_human_date() {
+        assert_eq!(fmt_time(1788885610), "08 Sep 2026 16:40:10 UTC");
+        assert_eq!(fmt_time(0), "01 Jan 1970 00:00:00 UTC");
+        assert_eq!(fmt_time(-86400), "31 Dec 1969 00:00:00 UTC");
     }
 }

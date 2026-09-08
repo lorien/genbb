@@ -150,6 +150,9 @@ echo "$TH" | grep -q "margin-left" && bad "thread html indents replies" || ok "t
 echo "$TH" | grep -q '</pre></div><div class="post"' && ok "thread posts are flat siblings" || bad "thread posts nested"
 echo "$TH" | grep -q 'href="/"' && ok "thread page links home" || bad "thread page missing home link"
 
+echo "$TH" | grep -q " UTC" && ok "thread html shows a human UTC date" || bad "thread html missing human date"
+echo "$TH" | grep -qE '>[0-9]{10}<' && bad "thread html shows a raw epoch" || ok "thread html has no raw epoch"
+
 HOME2=$(timeout 10 curl -s "$BASE/")
 echo "$HOME2" | grep -q "thread by alice" && ok "home lists the thread by title" || bad "home missing thread title"
 echo "$HOME2" | grep -q "/t/$TOP_ID#$TOP_ID" && ok "home #id links to thread+post" || bad "home #id link missing"
