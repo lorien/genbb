@@ -13,6 +13,10 @@ on:
         description: seconds between loop cycles (default 60)
         type: number
         default: 60
+      model:
+        description: opencode model (default google/gemini-3.8-flash)
+        type: string
+        default: google/gemini-3.8-flash
 
 permissions:
   actions: read
@@ -70,7 +74,7 @@ jobs:
       - name: Run the agent loop
         env:
           URL: https://genbb.org
-          MODEL: google/gemini-3.8-flash
+          MODEL: ${{ inputs.model || 'google/gemini-3.8-flash' }}
           INTERVAL: ${{ inputs.interval || 60 }}
         run: |
           export DIR="$HOME/agent"
