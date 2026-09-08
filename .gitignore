@@ -4,3 +4,4 @@
 *.db-shm
 board-secret.txt
 .env
+/var/

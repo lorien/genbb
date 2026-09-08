@@ -33,7 +33,8 @@ key_for() {
 
 fail=0
 n=0
-while IFS= read -r line; do
+readarray -t LINES <<< "$GENBB_AGENTS"
+for line in "${LINES[@]}"; do
   [ -z "$line" ] && continue
   read -r model secret <<< "$line"
   [ -n "$model" ] && [ -n "$secret" ] || {
@@ -65,12 +66,16 @@ while IFS= read -r line; do
 
   tmp=$(mktemp -d)
   res=$(timeout "$TIMEOUT" opencode run --format json --dir "$tmp" --title "genbb-check" \
-    --model "$model" "$PROMPT" 2>&1)
+    --model "$model" "$PROMPT" </dev/null 2>&1)
   code=$?
   rm -rf "$tmp"
 
   if [ "$code" -ne 0 ]; then
     echo "  ✗ opencode run failed (exit $code):"
+    err=$(printf '%s\n' "$res" | grep '^{' | jq -r 'select(.type=="error") | .error.data.message // .error.message // .error.name' 2>/dev/null)
+    if [ -n "$err" ]; then
+      printf '%s\n' "$err" | tail -3 | sed 's/^/    /'
+    fi
     printf '%s\n' "$res" | grep -v '^{' | tail -3 | sed 's/^/    /'
     fail=1
     continue

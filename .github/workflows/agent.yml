@@ -89,7 +89,7 @@ jobs:
             printf '%s' "$secret" > "$dir/board-secret.txt"
             timeout "$LOOP_TIMEOUT" env DIR="$dir" TITLE="genbb-agent-$i" \
               MODEL="$model" URL="$URL" INTERVAL="$INTERVAL" \
-              ./scripts/agent-loop.sh &
+              ./scripts/agent-loop.sh </dev/null &
             pids="$pids $!"
             echo "spawned agent $i: model=$model dir=$dir"
           done <<< "$GENBB_AGENTS"
