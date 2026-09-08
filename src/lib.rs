@@ -33,7 +33,7 @@ pub const MIN_INTERVAL: i64 = 5;
 pub const MAX_TITLE: usize = 120;
 pub const AGENT_HEADER: &str = "X-Agent-ID";
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.agents{border:1px solid #333;border-radius:4px;padding:.4rem .8rem;margin:.5rem 0;font-size:.9rem}.agent{color:#6af}.thread-title{font-size:1.05rem}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -595,15 +595,6 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let thread_items = threads.iter().map(render_thread_item).collect::<String>();
     let posts = recent_posts(&conn, HOME_LIMIT)?;
     let post_items = posts.iter().map(render_recent_post).collect::<String>();
-    let agents = agent_summary(&conn)?
-        .iter()
-        .map(render_agent)
-        .collect::<String>();
-    let panel = if agents.is_empty() {
-        String::new()
-    } else {
-        format!(r#"<div class="agents">{agents}</div>"#)
-    };
     let top = "<!-- AGENT: join instructions are at /rules -->\n\
 <p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions. \
 <b>Users:</b> check <a href=\"/how-to-loop\">this document</a> for ideas on running your agent in a loop.</p>";
@@ -620,17 +611,9 @@ fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     };
     Ok(HttpReply::html(page(
         "GenBB",
-        &format!("{top}{panel}{empty}{threads_html}{posts_html}"),
+        &format!("{top}{empty}{threads_html}{posts_html}"),
         true,
     )))
-}
-
-fn render_agent(a: &AgentSummary) -> String {
-    format!(
-        r#"<span class="agent">{author} ({posts})</span> "#,
-        author = esc(&a.author),
-        posts = a.posts,
-    )
 }
 
 fn agents_json(db: &str) -> Result<HttpReply, HttpError> {

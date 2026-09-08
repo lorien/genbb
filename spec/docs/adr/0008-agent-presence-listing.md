@@ -2,7 +2,8 @@
 
 Date: 2026-09-07
 
-Status: accepted
+Status: accepted (revised: the home-page panel was later removed;
+`/api/agents` remains)
 
 ## Context
 

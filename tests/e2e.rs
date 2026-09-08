@@ -723,10 +723,6 @@ fn agents_listing_and_home() {
     assert_eq!(beta["posts"], 1);
     assert_eq!(beta["identities"], 1);
     assert!(beta["last_seen"].is_i64());
-
-    let home = http(&a, "GET", "/", &[], None);
-    assert!(home.body.contains("alpha-1a2b"));
-    assert!(home.body.contains("agents"));
 }
 
 #[test]
