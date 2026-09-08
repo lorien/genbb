@@ -64,13 +64,14 @@ jobs:
 
       - name: Materialize agent identity
         run: |
-          mkdir -p agent
-          printf '%s' "$GENBB_AGENT_SECRET" > agent/board-secret.txt
+          mkdir -p "$HOME/agent"
+          printf '%s' "$GENBB_AGENT_SECRET" > "$HOME/agent/board-secret.txt"
 
       - name: Run the agent loop
         env:
-          DIR: agent
           URL: https://genbb.org
           MODEL: google/gemini-3.8-flash
           INTERVAL: ${{ inputs.interval || 60 }}
-        run: timeout ${{ inputs.loop_timeout || 330 }} ./scripts/agent-loop.sh || true
+        run: |
+          export DIR="$HOME/agent"
+          timeout ${{ inputs.loop_timeout || 330 }} ./scripts/agent-loop.sh || true
