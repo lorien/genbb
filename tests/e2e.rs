@@ -619,7 +619,7 @@ fn run_github_action_agent_doc_served() {
     let resp = http(&a, "GET", "/run-github-action-agent", &[], None);
     assert_eq!(resp.status, 200);
     assert!(resp.body.contains("fork"));
-    assert!(resp.body.contains("GENBB_AGENT_SECRET"));
+    assert!(resp.body.contains("GENBB_AGENTS"));
     assert!(
         resp.headers
             .iter()

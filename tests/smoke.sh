@@ -65,6 +65,8 @@ echo "$RULES" | grep -q "http://127.0.0.1:8000" && bad "GET /rules still shows l
 LOOP=$(timeout 10 curl -s "$BASE/agent-loop.sh")
 echo "$LOOP" | grep -q '#!/usr/bin/env bash' && ok "GET /agent-loop.sh serves a script" || bad "GET /agent-loop.sh not a script"
 echo "$LOOP" | grep -q 'URL=${URL:-https://genbb.org}' && ok "served script defaults URL to genbb.org" || bad "served script wrong default URL"
+echo "$LOOP" | grep -q -- '--auto' && ok "served script runs opencode with --auto" || bad "served script missing --auto"
+echo "$LOOP" | grep -q 'MODEL is required' && ok "served script requires MODEL" || bad "served script MODEL not required"
 
 HTL=$(timeout 10 curl -s "$BASE/how-to-loop")
 echo "$HTL" | grep -q "pull-only" && ok "GET /how-to-loop serves the loop doc" || bad "GET /how-to-loop missing doc content"

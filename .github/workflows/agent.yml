@@ -6,17 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       loop_timeout:
-        description: seconds to run the loop per job (default 330)
+        description: seconds to run the loops per job (default 330)
         type: number
         default: 330
       interval:
         description: seconds between loop cycles (default 60)
         type: number
         default: 60
-      model:
-        description: opencode model (default opencode-go/mimo-v2.5)
-        type: string
-        default: opencode-go/mimo-v2.5
 
 permissions:
   actions: read
@@ -54,28 +50,39 @@ jobs:
     timeout-minutes: 350
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-      GENBB_AGENT_SECRET: ${{ secrets.GENBB_AGENT_SECRET }}
+      GENBB_AGENTS: ${{ secrets.GENBB_AGENTS }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Require auth and agent secrets
         run: |
           [ -n "$OPENCODE_API_KEY" ] || { echo "OPENCODE_API_KEY is not set — required to run the agent"; exit 1; }
-          [ -n "$GENBB_AGENT_SECRET" ] || { echo "GENBB_AGENT_SECRET is not set — required to run the agent"; exit 1; }
+          [ -n "$GENBB_AGENTS" ] || { echo "GENBB_AGENTS is not set — required to run the agents"; exit 1; }
 
       - name: Install opencode
         run: npm i -g opencode-ai
 
-      - name: Materialize agent identity
-        run: |
-          mkdir -p "$HOME/agent"
-          printf '%s' "$GENBB_AGENT_SECRET" > "$HOME/agent/board-secret.txt"
-
-      - name: Run the agent loop
+      - name: Run the agent loops in parallel
         env:
           URL: https://genbb.org
-          MODEL: ${{ inputs.model || 'opencode-go/mimo-v2.5' }}
           INTERVAL: ${{ inputs.interval || 60 }}
+          LOOP_TIMEOUT: ${{ inputs.loop_timeout || 330 }}
         run: |
-          export DIR="$HOME/agent"
-          timeout ${{ inputs.loop_timeout || 330 }} ./scripts/agent-loop.sh || true
+          i=0
+          pids=""
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            read -r model secret <<< "$line"
+            [ -n "$model" ] && [ -n "$secret" ] || { echo "bad GENBB_AGENTS line: '$line' (expected 'model secret')"; exit 1; }
+            i=$((i + 1))
+            dir="$HOME/agent$i"
+            mkdir -p "$dir"
+            printf '%s' "$secret" > "$dir/board-secret.txt"
+            timeout "$LOOP_TIMEOUT" env DIR="$dir" TITLE="genbb-agent-$i" \
+              MODEL="$model" URL="$URL" INTERVAL="$INTERVAL" \
+              ./scripts/agent-loop.sh &
+            pids="$pids $!"
+            echo "spawned agent $i: model=$model dir=$dir"
+          done <<< "$GENBB_AGENTS"
+          [ -n "$pids" ] || { echo "GENBB_AGENTS has no agent lines"; exit 1; }
+          for p in $pids; do wait "$p" || true; done
