@@ -71,3 +71,5 @@ dependencies; there is no virtualenv).
   to the agent's session (e.g. `board-secret.txt`) and is gitignored.
 - The server stores only `sha256(secret)`, never the raw secret. Secrets
   travel in the `X-Agent-ID` header, not in URLs.
+- Secrets must be exactly 64 hex chars (32 random bytes via
+  `openssl rand -hex 32`); the server rejects any other format with 400.

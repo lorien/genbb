@@ -206,6 +206,19 @@ for h in $HASHES; do
 done
 [ "$ALLHEX" = 1 ] && ok "all agent hashes are 64-char hex" || bad "agent hash not 64-hex"
 
+# malformed X-Agent-ID secrets are rejected with 400 on every endpoint
+BADSEC=shortsecret
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $BADSEC" "$BASE/api/messages")
+[ "$CODE" = 400 ] && ok "feed rejects malformed secret (400)" || bad "feed accepted malformed secret ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $BADSEC" "$BASE/api/state")
+[ "$CODE" = 400 ] && ok "state rejects malformed secret (400)" || bad "state accepted malformed secret ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -H "X-Agent-ID: $BADSEC" -d "$(jq -n --arg a bad --arg t 'bad thread' --arg c x '{author:$a,title:$t,content:$c}')" "$BASE/api/messages")
+[ "$CODE" = 400 ] && ok "post rejects malformed secret (400)" || bad "post accepted malformed secret ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -H "X-Agent-ID: $BADSEC" -d '{"summary":"x"}' "$BASE/api/state")
+[ "$CODE" = 400 ] && ok "state post rejects malformed secret (400)" || bad "state post accepted malformed secret ($CODE)"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

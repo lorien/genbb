@@ -5,6 +5,17 @@ use std::time::Duration;
 
 use genbb::{BoardServer, hash_secret};
 
+// Valid 64-hex agent secrets, as `openssl rand -hex 32` prints.
+const SECRET_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const SECRET_B: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+const SECRET_C: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+const SECRET_D: &str = "4444444444444444444444444444444444444444444444444444444444444444";
+const SECRET_E: &str = "5555555555555555555555555555555555555555555555555555555555555555";
+const SECRET_F: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+const SECRET_G: &str = "7777777777777777777777777777777777777777777777777777777777777777";
+const SECRET_H: &str = "8888888888888888888888888888888888888888888888888888888888888888";
+const SECRET_I: &str = "9999999999999999999999999999999999999999999999999999999999999999";
+
 static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_db() -> String {
@@ -262,14 +273,14 @@ fn agent_posts_fetched_by_header() {
     post_json(
         &a,
         r#"{"author":"agent-x","content":"mine"}"#,
-        Some("secret-abc"),
+        Some(SECRET_A),
     );
 
     let mine = http(
         &a,
         "GET",
         "/api/messages",
-        &[("X-Agent-ID", "secret-abc")],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     let list = msgs(&mine);
@@ -280,7 +291,7 @@ fn agent_posts_fetched_by_header() {
         &a,
         "GET",
         "/api/messages",
-        &[("X-Agent-ID", "other-secret")],
+        &[("X-Agent-ID", SECRET_B)],
         None,
     );
     assert!(msgs(&wrong).is_empty());
@@ -294,7 +305,7 @@ fn state_requires_header_and_roundtrips() {
     let no_header = http(&a, "GET", "/api/state", &[], None);
     assert_eq!(no_header.status, 401);
 
-    let empty = http(&a, "GET", "/api/state", &[("X-Agent-ID", "s1")], None);
+    let empty = http(&a, "GET", "/api/state", &[("X-Agent-ID", SECRET_C)], None);
     assert_eq!(empty.status, 200);
     assert_eq!(summary(&empty), "");
 
@@ -302,15 +313,15 @@ fn state_requires_header_and_roundtrips() {
         &a,
         "POST",
         "/api/state",
-        &[("X-Agent-ID", "s1"), ("Content-Type", "application/json")],
+        &[("X-Agent-ID", SECRET_C), ("Content-Type", "application/json")],
         Some(r#"{"summary":"remember this"}"#),
     );
     assert_eq!(write.status, 200);
 
-    let read = http(&a, "GET", "/api/state", &[("X-Agent-ID", "s1")], None);
+    let read = http(&a, "GET", "/api/state", &[("X-Agent-ID", SECRET_C)], None);
     assert_eq!(summary(&read), "remember this");
 
-    let other = http(&a, "GET", "/api/state", &[("X-Agent-ID", "s2")], None);
+    let other = http(&a, "GET", "/api/state", &[("X-Agent-ID", SECRET_D)], None);
     assert_eq!(summary(&other), "");
 }
 
@@ -431,7 +442,7 @@ fn raw_secret_never_stored() {
     post_json(
         &a,
         r#"{"author":"spy","content":"top secret"}"#,
-        Some("raw-secret-value-xyz"),
+        Some(SECRET_E),
     );
     let conn = rusqlite::Connection::open(&s.db_path).unwrap();
     let hashes: Vec<String> = conn
@@ -442,8 +453,8 @@ fn raw_secret_never_stored() {
         .map(|x| x.unwrap())
         .collect();
     assert_eq!(hashes.len(), 1);
-    assert_ne!(hashes[0], "raw-secret-value-xyz");
-    assert_eq!(hashes[0], hash_secret("raw-secret-value-xyz"));
+    assert_ne!(hashes[0], SECRET_E);
+    assert_eq!(hashes[0], hash_secret(SECRET_E));
     assert_eq!(hashes[0].len(), 64);
 }
 
@@ -461,6 +472,46 @@ fn invalid_query_params_return_400() {
     );
     assert_eq!(
         http(&a, "GET", "/api/thread?root=abc", &[], None).status,
+        400
+    );
+}
+
+#[test]
+fn malformed_agent_secret_rejected() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let bad = "not-a-real-secret";
+
+    // Optional header: if sent, it must be well-formed.
+    assert_eq!(
+        http(&a, "GET", "/api/messages", &[("X-Agent-ID", bad)], None).status,
+        400
+    );
+    assert_eq!(
+        post_json(&a, r#"{"author":"x","content":"y"}"#, Some(bad)).status,
+        400
+    );
+
+    // Required header: malformed is a 400, missing stays a 401.
+    assert_eq!(
+        http(&a, "GET", "/api/state", &[("X-Agent-ID", bad)], None).status,
+        400
+    );
+    assert_eq!(
+        http(
+            &a,
+            "POST",
+            "/api/state",
+            &[("X-Agent-ID", bad), ("Content-Type", "application/json")],
+            Some(r#"{"summary":"x"}"#),
+        )
+        .status,
+        400
+    );
+
+    // A correct-length secret with non-hex characters is also rejected.
+    assert_eq!(
+        http(&a, "GET", "/api/messages", &[("X-Agent-ID", "z".repeat(64).as_str())], None).status,
         400
     );
 }
@@ -509,7 +560,7 @@ fn size_caps() {
         "POST",
         "/api/state",
         &[
-            ("X-Agent-ID", "cap-s"),
+            ("X-Agent-ID", SECRET_F),
             ("Content-Type", "application/json"),
         ],
         Some(&long_summary),
@@ -692,18 +743,18 @@ fn agents_listing_and_home() {
     post_json(
         &a,
         r#"{"author":"alpha-1a2b","content":"hi"}"#,
-        Some("a-secret-1"),
+        Some(SECRET_G),
     );
     std::thread::sleep(Duration::from_secs(6));
     post_json(
         &a,
         r#"{"author":"alpha-1a2b","content":"me too"}"#,
-        Some("a-secret-2"),
+        Some(SECRET_H),
     );
     post_json(
         &a,
         r#"{"author":"beta-3c4d","content":"yo"}"#,
-        Some("b-secret-2"),
+        Some(SECRET_I),
     );
     post_json(&a, r#"{"author":"carl","content":"no id"}"#, None);
 
@@ -712,8 +763,8 @@ fn agents_listing_and_home() {
     let body = body_json(&resp);
     let agents = body["agents"].as_array().unwrap();
     assert_eq!(agents.len(), 2);
-    assert!(!resp.body.contains("a-secret-1"));
-    assert!(!resp.body.contains("b-secret-2"));
+    assert!(!resp.body.contains(SECRET_G));
+    assert!(!resp.body.contains(SECRET_I));
 
     let alpha = agents.iter().find(|x| x["author"] == "alpha-1a2b").unwrap();
     assert_eq!(alpha["posts"], 2);

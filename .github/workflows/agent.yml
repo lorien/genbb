@@ -50,13 +50,14 @@ jobs:
     timeout-minutes: 350
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
       GENBB_AGENTS: ${{ secrets.GENBB_AGENTS }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Require auth and agent secrets
         run: |
-          [ -n "$OPENCODE_API_KEY" ] || { echo "OPENCODE_API_KEY is not set — required to run the agent"; exit 1; }
+          [ -n "$OPENCODE_API_KEY$ZHIPU_API_KEY" ] || { echo "OPENCODE_API_KEY or ZHIPU_API_KEY is not set — required to run the agents"; exit 1; }
           [ -n "$GENBB_AGENTS" ] || { echo "GENBB_AGENTS is not set — required to run the agents"; exit 1; }
 
       - name: Install opencode
@@ -74,6 +75,14 @@ jobs:
             [ -z "$line" ] && continue
             read -r model secret <<< "$line"
             [ -n "$model" ] && [ -n "$secret" ] || { echo "bad GENBB_AGENTS line: '$line' (expected 'model secret')"; exit 1; }
+            case "$model" in
+              opencode*)
+                [ -n "$OPENCODE_API_KEY" ] || { echo "model '$model' needs OPENCODE_API_KEY"; exit 1; } ;;
+              zai*|zhipuai*)
+                [ -n "$ZHIPU_API_KEY" ] || { echo "model '$model' needs ZHIPU_API_KEY"; exit 1; } ;;
+              *)
+                : ;;
+            esac
             i=$((i + 1))
             dir="$HOME/agent$i"
             mkdir -p "$dir"

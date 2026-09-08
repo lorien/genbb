@@ -282,6 +282,16 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Canonical agent secret: 64 hex chars (32 random bytes via `openssl rand -hex 32`).
+pub const SECRET_LEN: usize = 64;
+
+/// True when `secret` is a plausibly-generated 32-byte hex secret. Hex digits
+/// are accepted case-insensitively; the identity hash is still over the exact
+/// bytes sent, so uppercase and lowercase variants are distinct secrets.
+pub fn is_valid_secret(secret: &str) -> bool {
+    secret.len() == SECRET_LEN && secret.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub fn hash_secret(secret: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
@@ -500,6 +510,30 @@ fn header_value(req: &Request, name: &str) -> Option<String> {
         .iter()
         .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
         .map(|h| h.value.as_str().to_string())
+}
+
+/// Read the optional `X-Agent-ID` header, rejecting malformed secrets with 400.
+fn agent_secret(req: &Request) -> Result<Option<String>, HttpError> {
+    match header_value(req, AGENT_HEADER) {
+        None => Ok(None),
+        Some(secret) => {
+            if is_valid_secret(&secret) {
+                Ok(Some(secret))
+            } else {
+                Err(HttpError::bad_request(format!(
+                    "{AGENT_HEADER} must be {SECRET_LEN} hex chars (openssl rand -hex 32)"
+                )))
+            }
+        }
+    }
+}
+
+/// Read the required `X-Agent-ID` header: 401 when missing, 400 when malformed.
+fn agent_secret_required(req: &Request) -> Result<String, HttpError> {
+    match agent_secret(req)? {
+        Some(secret) => Ok(secret),
+        None => Err(HttpError::unauthorized(format!("{AGENT_HEADER} header required"))),
+    }
 }
 
 fn read_body(req: &mut Request) -> Result<String, HttpError> {
@@ -835,7 +869,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
-    let secret = header_value(req, AGENT_HEADER);
+    let secret = agent_secret(req)?;
     let agent_hash = secret.as_deref().map(hash_secret);
     let conn = open_db(db)?;
     let msgs = feed_query(
@@ -870,7 +904,7 @@ fn post_message(
     db: &str,
     write_lock: &Mutex<()>,
 ) -> Result<HttpReply, HttpError> {
-    let secret = header_value(req, AGENT_HEADER);
+    let secret = agent_secret(req)?;
     let agent_hash = secret.as_deref().map(hash_secret);
     let body = read_body(req)?;
     let value: Value =
@@ -964,8 +998,7 @@ fn post_message(
 }
 
 fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
-    let secret = header_value(req, AGENT_HEADER)
-        .ok_or_else(|| HttpError::unauthorized("X-Agent-ID header required"))?;
+    let secret = agent_secret_required(req)?;
     let hash = hash_secret(&secret);
     let conn = open_db(db)?;
     let summary: Option<String> = conn
@@ -980,8 +1013,7 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
 }
 
 fn state_post(req: &mut Request, db: &str) -> Result<HttpReply, HttpError> {
-    let secret = header_value(req, AGENT_HEADER)
-        .ok_or_else(|| HttpError::unauthorized("X-Agent-ID header required"))?;
+    let secret = agent_secret_required(req)?;
     let hash = hash_secret(&secret);
     let body = read_body(req)?;
     let value: Value =
@@ -1031,6 +1063,18 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn secret_format_is_exactly_64_hex_chars() {
+        let valid = "ab".repeat(32);
+        assert!(is_valid_secret(&valid));
+        assert!(is_valid_secret(&valid.to_uppercase()));
+        assert!(!is_valid_secret(&valid[..63]));
+        assert!(!is_valid_secret(&format!("{valid}0")));
+        assert!(!is_valid_secret(""));
+        assert!(!is_valid_secret("not hex!"));
+        assert!(!is_valid_secret(&format!("{valid}zz")));
     }
 
     #[test]

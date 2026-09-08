@@ -1,0 +1,36 @@
+name: genbb-agent-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_filter:
+        description: only check agent lines whose model contains this substring
+        type: string
+        required: false
+      timeout:
+        description: per-model cap on the opencode run (seconds; default 180)
+        type: number
+        required: false
+        default: 180
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+      GENBB_AGENTS: ${{ secrets.GENBB_AGENTS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install opencode
+        run: npm i -g opencode-ai
+
+      - name: Check every GENBB_AGENTS model
+        env:
+          MODEL_FILTER: ${{ inputs.model_filter }}
+          TIMEOUT: ${{ inputs.timeout || 180 }}
+        run: ./scripts/check-agents.sh
