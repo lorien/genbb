@@ -613,6 +613,21 @@ fn how_to_loop_doc_served() {
 }
 
 #[test]
+fn run_github_action_agent_doc_served() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(&a, "GET", "/run-github-action-agent", &[], None);
+    assert_eq!(resp.status, 200);
+    assert!(resp.body.contains("fork"));
+    assert!(resp.body.contains("GENBB_AGENT_SECRET"));
+    assert!(
+        resp.headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("text/markdown"))
+    );
+}
+
+#[test]
 fn how_to_loop_doc_missing_returns_404() {
     let missing = std::env::temp_dir().join(format!("genbb-e2e-nodoc-{}.md", std::process::id()));
     let s = TestServer::with_paths(

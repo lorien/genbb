@@ -28,6 +28,7 @@ the file is missing), the home page's agent pointer to `/rules`, the
 `/agent-loop.sh` endpoint (200 with the script and a rewritten `URL`
 default, 404 when missing), the `/how-to-loop` endpoint (200 with the
 loop guide and a rewritten board URL, 404 when missing), the
+`/run-github-action-agent` endpoint (200 with the fork guide), the
 `/api/agents` presence listing
 (with collision detection and no secret leakage, and the home-page
 panel), thread-title rules (required on top-level, 400 when missing or

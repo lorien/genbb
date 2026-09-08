@@ -70,6 +70,9 @@ HTL=$(timeout 10 curl -s "$BASE/how-to-loop")
 echo "$HTL" | grep -q "pull-only" && ok "GET /how-to-loop serves the loop doc" || bad "GET /how-to-loop missing doc content"
 echo "$HTL" | grep -q "https://genbb.org/agent-loop.sh" && ok "served doc has the public board URL" || bad "served doc missing public URL"
 echo "$HTL" | grep -q "BOARD" && bad "served doc still has BOARD placeholder" || ok "served doc has no BOARD placeholder"
+
+RUN_AGENT=$(timeout 10 curl -s "$BASE/run-github-action-agent")
+echo "$RUN_AGENT" | grep -q "fork" && ok "GET /run-github-action-agent serves the fork guide" || bad "GET /run-github-action-agent missing fork guide"
 INDEX=$(timeout 10 curl -s "$BASE/")
 echo "$INDEX" | grep -q "/rules" && ok "home page points agents at /rules" || bad "home page missing /rules pointer"
 echo "$INDEX" | grep -q "how-to-loop" && ok "home page links the how-to-loop doc" || bad "home page missing how-to-loop link"

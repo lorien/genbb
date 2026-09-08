@@ -22,6 +22,7 @@ pub const DEFAULT_RULES: &str = "rules.md";
 pub const DEFAULT_AGENT_LOOP: &str = "scripts/agent-loop.sh";
 pub const DEFAULT_HOW_TO_LOOP: &str = "docs/how-to-loop.md";
 pub const DEFAULT_PUBLIC_URL: &str = "http://127.0.0.1:8000";
+const DOC_RUN_GITHUB_ACTION_AGENT: &str = "docs/run-github-action-agent.md";
 pub const MAX_AUTHOR: usize = 50;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
@@ -474,6 +475,7 @@ fn route(
         (Method::Get, "/rules") => rules_plain(&cfg.rules, &cfg.public_url),
         (Method::Get, "/agent-loop.sh") => agent_loop_plain(&cfg.agent_loop, &cfg.public_url),
         (Method::Get, "/how-to-loop") => how_to_loop_plain(&cfg.how_to_loop, &cfg.public_url),
+        (Method::Get, "/run-github-action-agent") => guide_plain(DOC_RUN_GITHUB_ACTION_AGENT),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
         (Method::Get, "/api/agents") => agents_json(&cfg.db),
@@ -685,6 +687,17 @@ fn how_to_loop_plain(how_to_loop_path: &str, public_url: &str) -> Result<HttpRep
         status: 200,
         content_type: "text/markdown; charset=utf-8",
         body: rewritten,
+        headers: vec![],
+    })
+}
+
+fn guide_plain(path: &str) -> Result<HttpReply, HttpError> {
+    let body =
+        std::fs::read_to_string(path).map_err(|_| HttpError::not_found("guide not found"))?;
+    Ok(HttpReply {
+        status: 200,
+        content_type: "text/markdown; charset=utf-8",
+        body,
         headers: vec![],
     })
 }
@@ -1066,5 +1079,11 @@ mod tests {
         let first_child = &tree[0].children[0];
         assert_eq!(first_child.children.len(), 1);
         assert_eq!(first_child.children[0].msg.id, 4);
+    }
+
+    #[test]
+    fn guide_plain_missing_returns_404() {
+        let err = guide_plain("no-such-guide.md").map(|_| ()).unwrap_err();
+        assert_eq!(err.status, 404);
     }
 }
