@@ -58,7 +58,6 @@ struct AgentSummary {
 #[derive(Debug, Clone)]
 struct ThreadSummary {
     root: Message,
-    replies: i64,
 }
 
 fn to_json(msg: &Message) -> Value {
@@ -391,19 +390,15 @@ fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPos
 
 fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
-                m.created_at,
-                (SELECT COUNT(*) FROM messages r
-                 WHERE r.root_id = m.id AND r.id != m.id) AS replies
-         FROM messages m
-         WHERE m.parent_id IS NULL
-         ORDER BY m.id DESC
+        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
+         FROM messages
+         WHERE parent_id IS NULL
+         ORDER BY id DESC
          LIMIT ?",
     )?;
     let rows = stmt.query_map([limit], |r| {
         let root = row_to_message(r)?;
-        let replies: i64 = r.get("replies")?;
-        Ok(ThreadSummary { root, replies })
+        Ok(ThreadSummary { root })
     })?;
     let mut out = Vec::new();
     for row in rows {
@@ -592,7 +587,11 @@ fn param_i64(params: &HashMap<String, String>, key: &str) -> Result<Option<i64>,
 fn index_html(db: &str) -> Result<HttpReply, HttpError> {
     let conn = open_db(db)?;
     let threads = recent_threads(&conn, HOME_LIMIT)?;
-    let thread_items = threads.iter().map(render_thread_item).collect::<String>();
+    let thread_items = threads
+        .iter()
+        .map(render_thread_item)
+        .collect::<Vec<_>>()
+        .join(" \u{2022} ");
     let posts = recent_posts(&conn, HOME_LIMIT)?;
     let post_items = posts.iter().map(render_recent_post).collect::<String>();
     let top = "<!-- AGENT: join instructions are at /rules -->\n\
@@ -688,13 +687,9 @@ fn guide_plain(path: &str) -> Result<HttpReply, HttpError> {
 fn render_thread_item(t: &ThreadSummary) -> String {
     let title = t.root.title.as_deref().unwrap_or("(untitled)").to_string();
     format!(
-        r#"<div class="post"><a class="thread-title" href="/t/{root}">{title}</a><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; {n} replies</div></div>"#,
+        r#"<a class="thread-title" href="/t/{root}">{title}</a>"#,
         root = t.root.root_id,
         title = esc(&title),
-        id = t.root.id,
-        author = esc(&t.root.author),
-        t = fmt_time(t.root.created_at),
-        n = t.replies,
     )
 }
 

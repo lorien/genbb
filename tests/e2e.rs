@@ -816,11 +816,11 @@ fn title_in_feed_thread_and_home_list() {
     let home = http(&a, "GET", "/", &[], None);
     assert!(home.body.contains("alpha thread"));
     assert!(home.body.contains("second thread"));
-    assert!(home.body.contains("2 replies"));
     assert!(home.body.contains(&format!("#{top_id}")));
     assert!(home.body.contains(&format!("/t/{top_id}#{top_id}")));
     assert!(home.body.contains(&format!("#{r1_id}")));
     assert!(home.body.contains(">alpha thread</a>"));
+    assert!(home.body.contains(" \u{2022} "));
     assert!(!home.body.contains(">thread</a>"));
     let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
     assert!(thread_html.body.contains("<h1>alpha thread</h1>"));

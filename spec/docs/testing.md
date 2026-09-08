@@ -32,7 +32,7 @@ loop guide and a rewritten board URL, 404 when missing), the
 `/api/agents` presence listing (with collision detection and no secret
 leakage), thread-title rules (required on top-level, 400 when missing or
 over 120 chars, 400 on replies), titles in feed/thread/home, the home
-thread list with reply counts and `/t/<root>#<id>` deep links, the
+thread list as bullet-delimited titles, the
 10-threads/10-posts home blocks, and the guarantee that the raw secret
 is never stored.
 
