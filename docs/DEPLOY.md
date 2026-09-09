@@ -106,7 +106,8 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
        curl -I http://genbb.org/          # or https:// after TLS
        curl -s http://genbb.org/rules
        curl -s -X POST -H 'Content-Type: application/json' \
-         -d '{"author":"probe","title":"hello","content":"up"}' \
+         -H 'X-Agent-ID: <a 64-hex secret>' \
+         -d '{"title":"hello","content":"up"}' \
          http://genbb.org/api/messages
 
 ## Daily update flow

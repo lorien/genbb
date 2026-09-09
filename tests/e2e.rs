@@ -176,7 +176,7 @@ fn http(
     }
 }
 
-fn post_json(addr: &str, body: &str, agent: Option<&str>) -> HttpResp {
+fn post_json(addr: &str, body: &str, secret: &str) -> HttpResp {
     let payload = match serde_json::from_str::<serde_json::Value>(body) {
         Ok(mut v) => {
             if v.get("parent_id").is_none() && v.get("title").is_none() {
@@ -186,11 +186,17 @@ fn post_json(addr: &str, body: &str, agent: Option<&str>) -> HttpResp {
         }
         Err(_) => body.to_string(),
     };
-    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-    if let Some(s) = agent {
-        headers.push(("X-Agent-ID", s));
-    }
-    http(addr, "POST", "/api/messages", &headers, Some(&payload))
+    http(
+        addr,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json"), ("X-Agent-ID", secret)],
+        Some(&payload),
+    )
+}
+
+fn dyn_secret(n: u8) -> String {
+    format!("{n:02x}").repeat(32)
 }
 
 fn body_json(resp: &HttpResp) -> serde_json::Value {
@@ -215,15 +221,15 @@ fn summary(resp: &HttpResp) -> String {
 fn post_top_level_and_reply() {
     let s = TestServer::start();
     let a = s.addr();
-    let top = post_json(&a, r#"{"author":"alice","content":"hello board"}"#, None);
+    let top = post_json(&a, r#"{"content":"hello board"}"#, SECRET_A);
     assert_eq!(top.status, 201);
     let top_id = body_json(&top)["id"].as_i64().unwrap();
     assert_eq!(body_json(&top)["root_id"].as_i64(), Some(top_id));
 
     let reply = post_json(
         &a,
-        &format!(r#"{{"author":"bob","content":"hi alice","parent_id":{top_id}}}"#),
-        None,
+        &format!(r#"{{"content":"hi alice","parent_id":{top_id}}}"#),
+        SECRET_B,
     );
     assert_eq!(reply.status, 201);
     let reply_id = body_json(&reply)["id"].as_i64().unwrap();
@@ -239,18 +245,25 @@ fn post_top_level_and_reply() {
 }
 
 #[test]
-fn feed_filters_after_author_limit() {
+fn feed_filters_after_agent_limit() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(&a, r#"{"author":"ann","content":"one"}"#, None);
-    post_json(&a, r#"{"author":"ben","content":"two"}"#, None);
-    let three = post_json(&a, r#"{"author":"cat","content":"three"}"#, None);
+    let one = post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+    let one_agent = body_json(&one)["agent_id"].as_str().unwrap().to_string();
+    post_json(&a, r#"{"content":"two"}"#, SECRET_B);
+    let three = post_json(&a, r#"{"content":"three"}"#, SECRET_C);
     let third_id = body_json(&three)["id"].as_i64().unwrap();
 
-    let author_filter = http(&a, "GET", "/api/messages?author=ann", &[], None);
-    let list = msgs(&author_filter);
+    let agent_filter = http(
+        &a,
+        "GET",
+        &format!("/api/messages?agent_id={one_agent}"),
+        &[],
+        None,
+    );
+    let list = msgs(&agent_filter);
     assert_eq!(list.len(), 1);
-    assert!(list.iter().all(|m| m["author"] == "ann"));
+    assert!(list.iter().all(|m| m["agent_id"].as_str() == Some(one_agent.as_str())));
 
     let after = http(
         &a,
@@ -269,12 +282,8 @@ fn feed_filters_after_author_limit() {
 fn agent_posts_fetched_by_header() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(&a, r#"{"author":"someone","content":"no id"}"#, None);
-    post_json(
-        &a,
-        r#"{"author":"agent-x","content":"mine"}"#,
-        Some(SECRET_A),
-    );
+    post_json(&a, r#"{"content":"someone"}"#, SECRET_A);
+    post_json(&a, r#"{"content":"mine"}"#, SECRET_B);
 
     let mine = http(
         &a,
@@ -285,13 +294,14 @@ fn agent_posts_fetched_by_header() {
     );
     let list = msgs(&mine);
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0]["author"], "agent-x");
+    assert!(list[0]["agent_id"].is_string());
+    assert!(list[0]["author"].is_null());
 
     let wrong = http(
         &a,
         "GET",
         "/api/messages",
-        &[("X-Agent-ID", SECRET_B)],
+        &[("X-Agent-ID", SECRET_C)],
         None,
     );
     assert!(msgs(&wrong).is_empty());
@@ -326,13 +336,13 @@ fn state_requires_header_and_roundtrips() {
 }
 
 #[test]
-fn rate_limit_blocks_same_author() {
+fn rate_limit_blocks_same_identity() {
     let s = TestServer::start();
     let a = s.addr();
-    let first = post_json(&a, r#"{"author":"fast","content":"first"}"#, None);
+    let first = post_json(&a, r#"{"content":"first"}"#, SECRET_A);
     assert_eq!(first.status, 201);
 
-    let second = post_json(&a, r#"{"author":"fast","content":"second"}"#, None);
+    let second = post_json(&a, r#"{"content":"second"}"#, SECRET_A);
     assert_eq!(second.status, 429);
     assert!(
         second
@@ -341,7 +351,7 @@ fn rate_limit_blocks_same_author() {
             .any(|(k, v)| k.eq_ignore_ascii_case("Retry-After") && v.parse::<u64>().is_ok())
     );
 
-    let other = post_json(&a, r#"{"author":"slowpoke","content":"fine"}"#, None);
+    let other = post_json(&a, r#"{"content":"fine"}"#, SECRET_B);
     assert_eq!(other.status, 201);
 }
 
@@ -350,52 +360,61 @@ fn validation_errors() {
     let s = TestServer::start();
     let a = s.addr();
 
+    // A stray author field is ignored; content is still required.
     assert_eq!(
-        post_json(&a, r#"{"author":"","content":"x"}"#, None).status,
+        post_json(&a, r#"{"author":"bogus","content":"x"}"#, SECRET_A).status,
+        201
+    );
+    assert!(
+        body_json(&post_json(&a, r#"{"author":"bogus","content":"x"}"#, SECRET_B))["author"]
+            .is_null()
+    );
+    assert_eq!(post_json(&a, r#"{"title":"t"}"#, SECRET_B).status, 400);
+    assert_eq!(post_json(&a, r#"not json"#, SECRET_B).status, 400);
+    assert_eq!(
+        post_json(&a, r#"{"content":"x","parent_id":"no"}"#, SECRET_B).status,
         400
     );
-    assert_eq!(post_json(&a, r#"{"author":"x"}"#, None).status, 400);
-    assert_eq!(post_json(&a, r#"{"content":"x"}"#, None).status, 400);
-    assert_eq!(post_json(&a, r#"not json"#, None).status, 400);
     assert_eq!(
-        post_json(&a, r#"{"author":"a","content":"x","parent_id":"no"}"#, None).status,
-        400
-    );
-    assert_eq!(
-        post_json(
-            &a,
-            r#"{"author":"a","content":"x","parent_id":99999}"#,
-            None
-        )
-        .status,
+        post_json(&a, r#"{"content":"x","parent_id":99999}"#, SECRET_C).status,
         400
     );
 
     let long_content = "x".repeat(2001);
-    let long = format!(r#"{{"author":"a","content":"{long_content}"}}"#);
-    assert_eq!(post_json(&a, &long, None).status, 400);
+    let long = format!(r#"{{"content":"{long_content}"}}"#);
+    assert_eq!(post_json(&a, &long, SECRET_B).status, 400);
+}
 
-    let long_author = "a".repeat(51);
-    let long = format!(r#"{{"author":"{long_author}","content":"x"}}"#);
-    assert_eq!(post_json(&a, &long, None).status, 400);
+#[test]
+fn headerless_post_rejected() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let resp = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[("Content-Type", "application/json")],
+        Some(r#"{"title":"t","content":"x"}"#),
+    );
+    assert_eq!(resp.status, 401);
 }
 
 #[test]
 fn thread_api_and_html_pages() {
     let s = TestServer::start();
     let a = s.addr();
-    let top = post_json(&a, r#"{"author":"t1","content":"root post"}"#, None);
+    let top = post_json(&a, r#"{"content":"root post"}"#, SECRET_A);
     let top_id = body_json(&top)["id"].as_i64().unwrap();
     let r1 = post_json(
         &a,
-        &format!(r#"{{"author":"t2","content":"reply one","parent_id":{top_id}}}"#),
-        None,
+        &format!(r#"{{"content":"reply one","parent_id":{top_id}}}"#),
+        SECRET_B,
     );
     let r1_id = body_json(&r1)["id"].as_i64().unwrap();
     post_json(
         &a,
-        &format!(r#"{{"author":"t3","content":"nested","parent_id":{r1_id}}}"#),
-        None,
+        &format!(r#"{{"content":"nested","parent_id":{r1_id}}}"#),
+        SECRET_C,
     );
 
     let thread = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
@@ -424,8 +443,8 @@ fn html_escapes_user_content() {
     let a = s.addr();
     let top = post_json(
         &a,
-        r#"{"author":"<b>evil</b>","content":"<script>alert(1)</script>"}"#,
-        None,
+        r#"{"title":"<b>evil</b>","content":"<script>alert(1)</script>"}"#,
+        SECRET_A,
     );
     let top_id = body_json(&top)["id"].as_i64().unwrap();
     let index = http(&a, "GET", "/", &[], None);
@@ -441,8 +460,8 @@ fn raw_secret_never_stored() {
     let a = s.addr();
     post_json(
         &a,
-        r#"{"author":"spy","content":"top secret"}"#,
-        Some(SECRET_E),
+        r#"{"content":"top secret"}"#,
+        SECRET_E,
     );
     let conn = rusqlite::Connection::open(&s.db_path).unwrap();
     let hashes: Vec<String> = conn
@@ -488,7 +507,7 @@ fn malformed_agent_secret_rejected() {
         400
     );
     assert_eq!(
-        post_json(&a, r#"{"author":"x","content":"y"}"#, Some(bad)).status,
+        post_json(&a, r#"{"content":"y"}"#, bad).status,
         400
     );
 
@@ -520,8 +539,8 @@ fn malformed_agent_secret_rejected() {
 fn limit_clamped_and_unknown_route() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(&a, r#"{"author":"l1","content":"one"}"#, None);
-    post_json(&a, r#"{"author":"l2","content":"two"}"#, None);
+    post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+    post_json(&a, r#"{"content":"two"}"#, SECRET_B);
 
     let zero = http(&a, "GET", "/api/messages?limit=0", &[], None);
     assert_eq!(msgs(&zero).len(), 1);
@@ -572,7 +591,7 @@ fn size_caps() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json")],
+        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_F)],
         Some(&huge_body),
     );
     assert_eq!(resp.status, 400);
@@ -582,38 +601,25 @@ fn size_caps() {
 fn boundary_values_accepted() {
     let s = TestServer::start();
     let a = s.addr();
-    let author50 = "a".repeat(50);
     let content2000 = "b".repeat(2000);
     let r1 = post_json(
         &a,
-        &format!(r#"{{"author":"{author50}","content":"ok"}}"#),
-        None,
+        &format!(r#"{{"content":"{content2000}"}}"#),
+        SECRET_A,
     );
     assert_eq!(r1.status, 201);
-    let r2 = post_json(
-        &a,
-        &format!(r#"{{"author":"bnd2","content":"{content2000}"}}"#),
-        None,
-    );
-    assert_eq!(r2.status, 201);
-    let too_long = "c".repeat(51);
-    let r3 = post_json(
-        &a,
-        &format!(r#"{{"author":"{too_long}","content":"x"}}"#),
-        None,
-    );
-    assert_eq!(r3.status, 400);
 }
 
 #[test]
-fn unicode_author_filter() {
+fn agent_id_feed_filter() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(&a, r#"{"author":"é","content":"bonjour"}"#, None);
-    let resp = http(&a, "GET", "/api/messages?author=%C3%A9", &[], None);
-    let list = msgs(&resp);
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0]["author"], "é");
+    let r = post_json(&a, r#"{"content":"bonjour"}"#, SECRET_A);
+    let id = body_json(&r)["agent_id"].as_str().unwrap().to_string();
+    let resp = http(&a, "GET", &format!("/api/messages?agent_id={id}"), &[], None);
+    assert_eq!(msgs(&resp).len(), 1);
+    let none = http(&a, "GET", "/api/messages?agent_id=deadbeefdead", &[], None);
+    assert!(msgs(&none).is_empty());
 }
 
 #[test]
@@ -740,89 +746,67 @@ fn agents_listing_and_home() {
     assert_eq!(empty.status, 200);
     assert_eq!(body_json(&empty)["agents"].as_array().unwrap().len(), 0);
 
-    post_json(
-        &a,
-        r#"{"author":"alpha-1a2b","content":"hi"}"#,
-        Some(SECRET_G),
-    );
-    std::thread::sleep(Duration::from_secs(6));
-    post_json(
-        &a,
-        r#"{"author":"alpha-1a2b","content":"me too"}"#,
-        Some(SECRET_H),
-    );
-    post_json(
-        &a,
-        r#"{"author":"beta-3c4d","content":"yo"}"#,
-        Some(SECRET_I),
-    );
-    post_json(&a, r#"{"author":"carl","content":"no id"}"#, None);
+    post_json(&a, r#"{"content":"hi"}"#, SECRET_G);
+    post_json(&a, r#"{"content":"me too"}"#, SECRET_H);
+    post_json(&a, r#"{"content":"yo"}"#, SECRET_I);
 
     let resp = http(&a, "GET", "/api/agents", &[], None);
     assert_eq!(resp.status, 200);
     let body = body_json(&resp);
     let agents = body["agents"].as_array().unwrap();
-    // Two secrets used the same name "alpha-1a2b" -> two identities;
-    // beta-3c4d -> one; carl (no id) is excluded.
+    // Three identities -> three entries with distinct 12-hex agent_ids,
+    // no name field, no secret leakage.
     assert_eq!(agents.len(), 3);
     assert!(!resp.body.contains(SECRET_G));
     assert!(!resp.body.contains(SECRET_I));
-
-    let alphas: Vec<_> = agents
-        .iter()
-        .filter(|x| x["author"] == "alpha-1a2b")
-        .collect();
-    assert_eq!(alphas.len(), 2);
-    for alpha in &alphas {
-        assert_eq!(alpha["posts"], 1);
-        let id = alpha["agent_id"].as_str().unwrap();
+    let mut ids: Vec<&str> = Vec::new();
+    for agent in agents {
+        assert_eq!(agent["posts"], 1);
+        let id = agent["agent_id"].as_str().unwrap();
         assert_eq!(id.len(), 12);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(alpha["identities"].is_null());
+        assert!(agent["author"].is_null());
+        assert!(agent["last_seen"].is_i64());
+        ids.push(id);
     }
-    assert_ne!(alphas[0]["agent_id"], alphas[1]["agent_id"]);
-
-    let beta = agents.iter().find(|x| x["author"] == "beta-3c4d").unwrap();
-    assert_eq!(beta["posts"], 1);
-    assert!(beta["last_seen"].is_i64());
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 3);
 }
 
 #[test]
 fn agent_id_is_permanent_and_stable() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(&a, r#"{"author":"n1","content":"one"}"#, Some(SECRET_A));
-    post_json(&a, r#"{"author":"n2","content":"two"}"#, Some(SECRET_A));
-    post_json(&a, r#"{"author":"m1","content":"mine"}"#, Some(SECRET_B));
-    post_json(&a, r#"{"author":"human","content":"hi"}"#, None);
+    let one = post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+    let id_a = body_json(&one)["agent_id"].as_str().unwrap().to_string();
+    std::thread::sleep(Duration::from_secs(6));
+    post_json(&a, r#"{"content":"two"}"#, SECRET_A);
+    let mine = post_json(&a, r#"{"content":"mine"}"#, SECRET_B);
+    let id_b = body_json(&mine)["agent_id"].as_str().unwrap().to_string();
 
-    let feed = http(&a, "GET", "/api/messages", &[], None);
-    assert_eq!(feed.status, 200);
-    let msgs = msgs(&feed);
-    let one = msgs.iter().find(|m| m["author"] == "n1").unwrap();
-    let two = msgs.iter().find(|m| m["author"] == "n2").unwrap();
-    let mine = msgs.iter().find(|m| m["author"] == "m1").unwrap();
-    let human = msgs.iter().find(|m| m["author"] == "human").unwrap();
-
-    let id_a = one["agent_id"].as_str().unwrap();
-    let id_b = mine["agent_id"].as_str().unwrap();
     assert_eq!(id_a.len(), 12);
     assert_eq!(id_b.len(), 12);
     assert!(id_a.chars().all(|c| c.is_ascii_hexdigit()));
     assert_ne!(id_a, id_b);
-    // Same secret, different names -> same permanent id.
-    assert_eq!(two["agent_id"].as_str().unwrap(), id_a);
-    // Human posts carry no agent id.
-    assert!(human["agent_id"].is_null());
+
+    // Same secret, different posts -> same permanent id. No names anywhere.
+    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let list = msgs(&feed);
+    assert_eq!(list.len(), 3);
+    assert!(list.iter().all(|m| m["author"].is_null()));
+    assert!(list.iter().all(|m| m["agent_id"].is_string()));
+    let two = list.iter().find(|m| m["content"] == "two").unwrap();
+    assert_eq!(two["agent_id"].as_str(), Some(id_a.as_str()));
 
     // /api/state reveals the caller's own id.
     let st = http(&a, "GET", "/api/state", &[("X-Agent-ID", SECRET_A)], None);
-    assert_eq!(body_json(&st)["agent_id"].as_str().unwrap(), id_a);
+    assert_eq!(body_json(&st)["agent_id"].as_str(), Some(id_a.as_str()));
 
     // The agent listing agrees.
     let body = body_json(&http(&a, "GET", "/api/agents", &[], None));
     let arr = body["agents"].as_array().unwrap();
-    assert!(arr.iter().any(|x| x["agent_id"].as_str() == Some(id_a)));
+    assert!(arr.iter().any(|x| x["agent_id"].as_str() == Some(id_a.as_str())));
 }
 
 #[test]
@@ -833,75 +817,63 @@ fn title_required_on_top_level() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json")],
-        Some(r#"{"author":"nt","content":"hi"}"#),
+        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_A)],
+        Some(r#"{"content":"hi"}"#),
     );
     assert_eq!(no_title.status, 400);
 
     let long_title = "t".repeat(121);
-    let long = format!(r#"{{"author":"nt2","title":"{long_title}","content":"hi"}}"#);
+    let long = format!(r#"{{"title":"{long_title}","content":"hi"}}"#);
     let resp = http(
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json")],
+        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_B)],
         Some(&long),
     );
     assert_eq!(resp.status, 400);
 
-    let ok = post_json(
-        &a,
-        r#"{"author":"nt3","title":"my thread","content":"hi"}"#,
-        None,
-    );
+    let ok = post_json(&a, r#"{"title":"my thread","content":"hi"}"#, SECRET_C);
     assert_eq!(ok.status, 201);
     let id = body_json(&ok)["id"].as_i64().unwrap();
     assert_eq!(body_json(&ok)["title"], "my thread");
 
-    let reply_with_title = post_json(
+    let reply = post_json(
         &a,
-        &format!(r#"{{"author":"nt4","content":"reply","parent_id":{id}}}"#),
-        None,
+        &format!(r#"{{"content":"reply","parent_id":{id}}}"#),
+        SECRET_D,
     );
-    let with_title =
-        format!(r#"{{"author":"nt5","title":"no","content":"reply","parent_id":{id}}}"#);
+    assert_eq!(reply.status, 201);
+
+    let with_title = format!(r#"{{"title":"no","content":"reply","parent_id":{id}}}"#);
     let resp = http(
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json")],
+        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_E)],
         Some(&with_title),
     );
     assert_eq!(resp.status, 400);
-    let _ = reply_with_title;
 }
 
 #[test]
 fn title_in_feed_thread_and_home_list() {
     let s = TestServer::start();
     let a = s.addr();
-    let top = post_json(
-        &a,
-        r#"{"author":"ta","title":"alpha thread","content":"root"}"#,
-        None,
-    );
+    let top = post_json(&a, r#"{"title":"alpha thread","content":"root"}"#, SECRET_A);
     let top_id = body_json(&top)["id"].as_i64().unwrap();
     let r1 = post_json(
         &a,
-        &format!(r#"{{"author":"tb","content":"reply","parent_id":{top_id}}}"#),
-        None,
+        &format!(r#"{{"content":"reply","parent_id":{top_id}}}"#),
+        SECRET_B,
     );
     let r1_id = body_json(&r1)["id"].as_i64().unwrap();
     post_json(
         &a,
-        &format!(r#"{{"author":"tc","content":"two","parent_id":{r1_id}}}"#),
-        None,
+        &format!(r#"{{"content":"two","parent_id":{r1_id}}}"#),
+        SECRET_C,
     );
-    post_json(
-        &a,
-        r#"{"author":"td","title":"second thread","content":"other root"}"#,
-        None,
-    );
+    post_json(&a, r#"{"title":"second thread","content":"other root"}"#, SECRET_D);
 
     let feed = http(&a, "GET", "/api/messages", &[], None);
     assert_eq!(body_json(&feed)["messages"][0]["title"], "alpha thread");
@@ -938,20 +910,20 @@ fn home_shows_ten_threads_and_ten_posts() {
     for i in 0..12 {
         post_json(
             &a,
-            &format!(r#"{{"author":"h{i}","title":"thread {i}","content":"root {i}"}}"#),
-            None,
+            &format!(r#"{{"title":"thread {i}","content":"root {i}"}}"#),
+            &dyn_secret(i),
         );
     }
     let top = post_json(
         &a,
-        r#"{"author":"ha","title":"head","content":"top root"}"#,
-        None,
+        r#"{"title":"head","content":"top root"}"#,
+        &dyn_secret(20),
     );
     let top_id = body_json(&top)["id"].as_i64().unwrap();
     let r1 = post_json(
         &a,
-        &format!(r#"{{"author":"hb","content":"reply body","parent_id":{top_id}}}"#),
-        None,
+        &format!(r#"{{"content":"reply body","parent_id":{top_id}}}"#),
+        &dyn_secret(21),
     );
     let r1_id = body_json(&r1)["id"].as_i64().unwrap();
 

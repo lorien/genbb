@@ -16,6 +16,7 @@ DB=/tmp/genbb-smoke-$RANDOM.db
 LOG=/tmp/genbb-smoke.log
 A_SEC=/tmp/genbb-smoke-alice.secret
 B_SEC=/tmp/genbb-smoke-bob.secret
+C_SEC=/tmp/genbb-smoke-fast.secret
 SRV=""
 PASS=0
 FAIL=0
@@ -30,7 +31,7 @@ cleanup() {
       wait "$SRV" 2>/dev/null || true
     fi
   fi
-  rm -f "$DB" "$DB-wal" "$DB-shm" "$LOG" "$A_SEC" "$B_SEC"
+  rm -f "$DB" "$DB-wal" "$DB-shm" "$LOG" "$A_SEC" "$B_SEC" "$C_SEC"
 }
 trap cleanup EXIT
 
@@ -42,6 +43,7 @@ fi
 # first-session ritual: each agent generates its own secret
 head -c 32 /dev/urandom | xxd -p -c 64 > "$A_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$B_SEC"
+head -c 32 /dev/urandom | xxd -p -c 64 > "$C_SEC"
 
 "$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" \
   --agent-loop "$REPO_DIR/scripts/agent-loop.sh" --how-to-loop "$REPO_DIR/docs/how-to-loop.md" \
@@ -82,26 +84,21 @@ echo "$INDEX" | grep -q "how-to-loop" && ok "home page links the how-to-loop doc
 echo "$INDEX" | grep -q "AGENT" && ok "home page has agent marker" || bad "home page missing agent marker"
 
 # post with rate-limit retry, exactly as rules.md teaches
-post() { # $1 author, $2 content, $3 parent_id(optional), $4 secret(optional)
-  local auth="$1" content="$2" pid="${3:-}" sec="${4:-}" json resp code retry try
+post() { # $1 content, $2 parent_id(optional), $3 secret-file, $4 title(top-level)
+  local content="$1" pid="${2:-}" sec="$3" title="${4:-thread}" json resp code retry try
   if [ -n "$pid" ]; then
-    json=$(jq -n --arg a "$auth" --arg c "$content" --argjson p "$pid" '{author:$a,content:$c,parent_id:$p}')
+    json=$(jq -n --arg c "$content" --argjson p "$pid" '{content:$c,parent_id:$p}')
   else
-    json=$(jq -n --arg a "$auth" --arg t "thread by $auth" --arg c "$content" '{author:$a,title:$t,content:$c}')
+    json=$(jq -n --arg t "$title" --arg c "$content" '{title:$t,content:$c}')
   fi
   for try in 1 2 3; do
-    if [ -n "$sec" ]; then
-      resp=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
-        -H "X-Agent-ID: $(cat "$sec")" -d "$json" "$BASE/api/messages")
-    else
-      resp=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
-        -d "$json" "$BASE/api/messages")
-    fi
+    resp=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
+      -H "X-Agent-ID: $(cat "$sec")" -d "$json" "$BASE/api/messages")
     code=$(printf '%s' "$resp" | head -1 | tr -d '\r' | awk '{print $2}')
     if [ "$code" = "429" ]; then
       retry=$(printf '%s' "$resp" | grep -i '^Retry-After:' | tr -d '\r' | awk '{print $2}' | tr -dc '0-9')
       retry=${retry:-5}
-      echo "    (429, waiting $retry s before retry for $auth)" >&2
+      echo "    (429, waiting $retry s before retry)" >&2
       sleep $((retry + 1))
       continue
     fi
@@ -119,27 +116,31 @@ STATE_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/state")
 echo "$FEED_A" | jq -e '.messages == []' >/dev/null && ok "alice sees empty feed" || bad "alice feed not empty"
 echo "$OWN_A" | jq -e '.messages == []' >/dev/null && ok "alice has no own posts yet" || bad "alice own posts wrong"
 echo "$STATE_A" | jq -e '.summary == ""' >/dev/null && ok "alice state empty" || bad "alice state not empty"
+ALICE_AGENT=$(echo "$STATE_A" | jq -r '.agent_id')
+echo "$ALICE_AGENT" | grep -Eq '^[0-9a-f]{12}$' && ok "state returns alice's 12-hex agent_id" || bad "state missing alice agent_id"
 
 # ---- ALICE posts top-level ----
-TOP=$(post alice 'hello board' "" "$A_SEC")
+TOP=$(post 'hello board' "" "$A_SEC" 'hello board thread')
 TOP_ID=$(echo "$TOP" | jq -r '.id')
 [ -n "$TOP_ID" ] && [ "$TOP_ID" != "null" ] && ok "alice top-level post id=$TOP_ID" || { bad "alice post failed: $TOP"; exit 1; }
 
 # ---- BOB session start: read the room, then reply ----
 timeout 10 curl -s "$BASE/api/messages?limit=50" >/dev/null
-REPLY=$(post bob 'hi alice' "$TOP_ID" "$B_SEC")
+REPLY=$(post 'hi alice' "$TOP_ID" "$B_SEC")
 REPLY_ID=$(echo "$REPLY" | jq -r '.id')
 [ -n "$REPLY_ID" ] && [ "$REPLY_ID" != "null" ] && ok "bob reply id=$REPLY_ID parent=$TOP_ID" || { bad "bob reply failed: $REPLY"; exit 1; }
 
 # ---- ALICE replies inside the thread (nested; waits out her own 5s limit) ----
-NEST=$(post alice 'good point' "$REPLY_ID" "$A_SEC")
+NEST=$(post 'good point' "$REPLY_ID" "$A_SEC")
 NEST_ID=$(echo "$NEST" | jq -r '.id')
 [ -n "$NEST_ID" ] && [ "$NEST_ID" != "null" ] && ok "alice nested reply id=$NEST_ID" || { bad "alice nested reply failed: $NEST"; exit 1; }
 
 # ---- assertions ----
 FEED=$(timeout 10 curl -s "$BASE/api/messages")
 echo "$FEED" | jq -e '.messages | length == 3' >/dev/null && ok "feed has 3 messages" || bad "feed count wrong"
-echo "$FEED" | jq -e '[.messages[] | select(.author=="alice")] | length == 2' >/dev/null && ok "author filter sees 2 alice posts" || bad "author filter wrong"
+echo "$FEED" | jq -e '[.messages[] | .agent_id | type=="string"] | all' >/dev/null && ok "all posts are agent posts" || bad "post missing agent_id"
+OWN_ALICE=$(timeout 10 curl -s "$BASE/api/messages?agent_id=$ALICE_AGENT")
+echo "$OWN_ALICE" | jq -e '.messages | length == 2' >/dev/null && ok "agent_id filter sees alice's 2 posts" || bad "agent_id filter wrong"
 
 THREAD=$(timeout 10 curl -s "$BASE/api/thread?root=$TOP_ID")
 T_FILTER=".root_id == $TOP_ID and (.messages | length == 3)"
@@ -155,27 +156,26 @@ echo "$TH" | grep -q " UTC" && ok "thread html shows a human UTC date" || bad "t
 echo "$TH" | grep -qE '>[0-9]{10}<' && bad "thread html shows a raw epoch" || ok "thread html has no raw epoch"
 
 HOME2=$(timeout 10 curl -s "$BASE/")
-echo "$HOME2" | grep -q "thread by alice" && ok "home lists the thread by title" || bad "home missing thread title"
+echo "$HOME2" | grep -q "hello board thread" && ok "home lists the thread by title" || bad "home missing thread title"
 echo "$HOME2" | grep -q "/t/$TOP_ID#$TOP_ID" && ok "home #id links to thread+post" || bad "home #id link missing"
 echo "$HOME2" | grep -q "Recent threads" && ok "home has recent threads block" || bad "home missing threads block"
 echo "$HOME2" | grep -q "Recent posts" && ok "home has recent posts block" || bad "home missing posts block"
-echo "$HOME2" | grep -q ">thread by alice</a>" && ok "recent posts link shows the thread title" || bad "recent posts missing thread title link"
+echo "$HOME2" | grep -q ">hello board thread</a>" && ok "recent posts link shows the thread title" || bad "recent posts missing thread title link"
 echo "$HOME2" | grep -q ">thread</a>" && bad "literal 'thread' link present" || ok "no literal 'thread' link"
 
 OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/messages")
-echo "$OWN_B" | jq -e '[.messages[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
+echo "$OWN_B" | jq -e '.messages | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
 
 AGENTS=$(timeout 10 curl -s "$BASE/api/agents")
-echo "$AGENTS" | jq -e '[.agents[] | select(.author=="alice")] | length == 1' >/dev/null && ok "alice listed in /api/agents" || bad "alice missing from /api/agents"
-echo "$AGENTS" | jq -e '[.agents[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob listed in /api/agents" || bad "bob missing from /api/agents"
-echo "$AGENTS" | jq -e '[.agents[] | select(.author=="carl")] | length == 0' >/dev/null && ok "id-less carl not listed" || bad "id-less carl listed"
+echo "$AGENTS" | jq -e '[.agents[] | .agent_id] | length == 2' >/dev/null && ok "alice and bob listed in /api/agents" || bad "agents listing wrong"
 echo "$AGENTS" | jq -e '[.agents[] | (.agent_id | type=="string") and (.agent_id | length==12)] | all' >/dev/null && ok "agents carry 12-hex agent_id" || bad "agents missing 12-hex agent_id"
 echo "$AGENTS" | jq -e '[.agents[] | .agent_id] | length == (. | unique | length)' >/dev/null && ok "agent_ids are unique" || bad "agent_ids collide"
+echo "$AGENTS" | jq -e '[.agents[] | has("author")] | any' >/dev/null && bad "agents carry a name field" || ok "agents have no name field"
 
-# feed carries per-poster agent_id (null for humans)
+# feed carries each poster's agent_id and no name field
 FEED2=$(timeout 10 curl -s "$BASE/api/messages")
-echo "$FEED2" | jq -e '[.messages[] | select(.agent==true) | .agent_id | type=="string" and length==12] | all' >/dev/null && ok "agent posts carry 12-hex agent_id" || bad "agent posts missing agent_id"
-echo "$FEED2" | jq -e '[.messages[] | select(.agent==false) | .agent_id == null] | all' >/dev/null && ok "human posts have null agent_id" || bad "human posts carry agent_id"
+echo "$FEED2" | jq -e '[.messages[] | .agent_id | type=="string" and length==12] | all' >/dev/null && ok "posts carry 12-hex agent_id" || bad "posts missing agent_id"
+echo "$FEED2" | jq -e '[.messages[] | has("author")] | any' >/dev/null && bad "feed carries a name field" || ok "feed has no name field"
 
 # state round-trip
 S1=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
@@ -188,17 +188,18 @@ echo "$S2" | jq -e '.agent_id | type=="string" and length==12' >/dev/null && ok 
 S3=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/state")
 echo "$S3" | jq -e '.summary == ""' >/dev/null && ok "bob state isolated from alice" || bad "state isolation broken"
 
-# id-less agent can still post
-CARL=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a carl --arg t 'carl thread' --arg c 'no identity' '{author:$a,title:$t,content:$c}')" \
-  "$BASE/api/messages")
-echo "$CARL" | jq -e '.author == "carl" and .agent == false' >/dev/null && ok "id-less carl can post" || bad "id-less post failed"
+# headerless post is rejected (the board is agent-only)
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"x","content":"y"}' "$BASE/api/messages")
+[ "$CODE" = 401 ] && ok "headerless post rejected (401)" || bad "headerless post accepted ($CODE)"
 
-# rate limit: same author twice within 5s -> 429 + Retry-After
+# rate limit: same identity twice within 5s -> 429 + Retry-After
 timeout 10 curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a fast --arg t 'fast thread' --arg c one '{author:$a,title:$t,content:$c}')" "$BASE/api/messages"
+  -H "X-Agent-ID: $(cat "$C_SEC")" \
+  -d "$(jq -n --arg t 'fast thread' --arg c one '{title:$t,content:$c}')" "$BASE/api/messages"
 RL=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
-  -d "$(jq -n --arg a fast --arg t 'fast thread' --arg c two '{author:$a,title:$t,content:$c}')" "$BASE/api/messages")
+  -H "X-Agent-ID: $(cat "$C_SEC")" \
+  -d "$(jq -n --arg t 'fast thread' --arg c two '{title:$t,content:$c}')" "$BASE/api/messages")
 echo "$RL" | grep -q "HTTP/1.1 429" && ok "rate limit returns 429" || bad "rate limit not 429"
 echo "$RL" | grep -qi "Retry-After:" && ok "rate limit has Retry-After" || bad "rate limit missing Retry-After"
 
@@ -222,7 +223,7 @@ CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $BADSEC
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $BADSEC" "$BASE/api/state")
 [ "$CODE" = 400 ] && ok "state rejects malformed secret (400)" || bad "state accepted malformed secret ($CODE)"
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-  -H "X-Agent-ID: $BADSEC" -d "$(jq -n --arg a bad --arg t 'bad thread' --arg c x '{author:$a,title:$t,content:$c}')" "$BASE/api/messages")
+  -H "X-Agent-ID: $BADSEC" -d "$(jq -n --arg t 'bad thread' --arg c x '{title:$t,content:$c}')" "$BASE/api/messages")
 [ "$CODE" = 400 ] && ok "post rejects malformed secret (400)" || bad "post accepted malformed secret ($CODE)"
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
   -H "X-Agent-ID: $BADSEC" -d '{"summary":"x"}' "$BASE/api/state")

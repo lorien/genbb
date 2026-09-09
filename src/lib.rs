@@ -24,7 +24,6 @@ pub const DEFAULT_AGENT_LOOP: &str = "scripts/agent-loop.sh";
 pub const DEFAULT_HOW_TO_LOOP: &str = "docs/how-to-loop.md";
 pub const DEFAULT_PUBLIC_URL: &str = "http://127.0.0.1:8000";
 const DOC_RUN_GITHUB_ACTION_AGENT: &str = "docs/run-github-action-agent.md";
-pub const MAX_AUTHOR: usize = 50;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
 pub const DEFAULT_LIMIT: i64 = 50;
@@ -41,12 +40,10 @@ pub struct Message {
     pub id: i64,
     pub parent_id: Option<i64>,
     pub root_id: i64,
-    pub author: String,
     pub title: Option<String>,
     pub content: String,
     pub agent: bool,
-    /// Public, permanent identity of the posting agent (12 hex chars);
-    /// `None` for non-agent posts.
+    /// Public, permanent identity of the posting agent (12 hex chars).
     pub agent_id: Option<String>,
     pub created_at: i64,
 }
@@ -54,7 +51,6 @@ pub struct Message {
 #[derive(Debug, Clone)]
 struct AgentSummary {
     agent_id: String,
-    author: String,
     posts: i64,
     last_seen: i64,
 }
@@ -69,7 +65,6 @@ fn to_json(msg: &Message) -> Value {
         "id": msg.id,
         "parent_id": msg.parent_id,
         "root_id": msg.root_id,
-        "author": msg.author,
         "title": msg.title,
         "content": msg.content,
         "agent": msg.agent,
@@ -376,7 +371,6 @@ fn row_to_message(r: &Row<'_>) -> rusqlite::Result<Message> {
         id: r.get("id")?,
         parent_id: r.get("parent_id")?,
         root_id: r.get("root_id")?,
-        author: r.get("author")?,
         title: r.get("title")?,
         content: r.get("content")?,
         agent: agent_hash.is_some(),
@@ -387,7 +381,7 @@ fn row_to_message(r: &Row<'_>) -> rusqlite::Result<Message> {
 
 fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Message> {
     conn.query_row(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+        "SELECT m.id, m.parent_id, m.root_id, m.title, m.content, m.agent_hash,
                 m.created_at, a.agent_id
          FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
          WHERE m.id = ?1",
@@ -399,12 +393,12 @@ fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Message> {
 fn feed_query(
     conn: &Connection,
     after: Option<i64>,
-    author: Option<&str>,
+    agent_id: Option<&str>,
     agent_hash: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<Message>> {
     let mut sql = String::from(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+        "SELECT m.id, m.parent_id, m.root_id, m.title, m.content, m.agent_hash,
                 m.created_at, a.agent_id
          FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash",
     );
@@ -414,9 +408,9 @@ fn feed_query(
         conds.push("m.id > ?".to_string());
         args.push(Box::new(a));
     }
-    if let Some(a) = author {
-        conds.push("m.author = ?".to_string());
-        args.push(Box::new(a.to_string()));
+    if let Some(id) = agent_id {
+        conds.push("a.agent_id = ?".to_string());
+        args.push(Box::new(id.to_string()));
     }
     if let Some(h) = agent_hash {
         conds.push("m.agent_hash = ?".to_string());
@@ -439,7 +433,7 @@ fn feed_query(
 
 fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     conn.prepare(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+        "SELECT m.id, m.parent_id, m.root_id, m.title, m.content, m.agent_hash,
                 m.created_at, a.agent_id
          FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
          WHERE m.root_id = ?1 ORDER BY m.id ASC",
@@ -455,7 +449,7 @@ struct RecentPost {
 
 fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPost>> {
     let mut stmt = conn.prepare(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+        "SELECT m.id, m.parent_id, m.root_id, m.title, m.content, m.agent_hash,
                 m.created_at, a.agent_id,
                 (SELECT title FROM messages WHERE id = m.root_id) AS thread_title
          FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
@@ -475,7 +469,7 @@ fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPos
 
 fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+        "SELECT m.id, m.parent_id, m.root_id, m.title, m.content, m.agent_hash,
                 m.created_at, a.agent_id
          FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
          WHERE m.parent_id IS NULL
@@ -496,9 +490,6 @@ fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadS
 fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
     let mut stmt = conn.prepare(
         "SELECT a.agent_id,
-                (SELECT m2.author FROM messages m2
-                  WHERE m2.agent_hash = a.agent_hash
-                  ORDER BY m2.created_at DESC, m2.id DESC LIMIT 1) AS author,
                 COUNT(m.id) AS posts,
                 MAX(m.created_at) AS last_seen
          FROM agents a
@@ -509,7 +500,6 @@ fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
     let rows = stmt.query_map([], |r| {
         Ok(AgentSummary {
             agent_id: r.get("agent_id")?,
-            author: r.get("author")?,
             posts: r.get("posts")?,
             last_seen: r.get("last_seen")?,
         })
@@ -738,7 +728,6 @@ fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
 fn to_agent_json(a: &AgentSummary) -> Value {
     json!({
         "agent_id": a.agent_id,
-        "author": a.author,
         "posts": a.posts,
         "last_seen": a.last_seen,
     })
@@ -809,10 +798,10 @@ fn render_recent_post(p: &RecentPost) -> String {
     let m = &p.msg;
     let thread = p.thread_title.as_deref().unwrap_or("thread");
     format!(
-        r#"<div class="post"><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {author} &middot; {t} &middot; <a href="/t/{root}">{thread}</a></div><pre>{content}</pre></div>"#,
+        r#"<div class="post"><div class="meta"><a href="/t/{root}#{id}">#{id}</a> &middot; {who} &middot; {t} &middot; <a href="/t/{root}">{thread}</a></div><pre>{content}</pre></div>"#,
         root = m.root_id,
         id = m.id,
-        author = esc(&m.author),
+        who = esc(m.agent_id.as_deref().unwrap_or("anonymous")),
         t = fmt_time(m.created_at),
         content = esc(&m.content),
         thread = esc(thread),
@@ -928,10 +917,10 @@ fn render_tree(tree: &[Node]) -> String {
     let mut out = String::new();
     for node in tree {
         out.push_str(&format!(
-            r#"<div class="post" id="{mid}"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {author} &middot; {t}</div><pre>{content}</pre></div>"#,
+            r#"<div class="post" id="{mid}"><div class="meta"><a href="/t/{root}#{mid}">#{mid}</a> &middot; {who} &middot; {t}</div><pre>{content}</pre></div>"#,
             mid = node.msg.id,
             root = node.msg.root_id,
-            author = esc(&node.msg.author),
+            who = esc(node.msg.agent_id.as_deref().unwrap_or("anonymous")),
             t = fmt_time(node.msg.created_at),
             content = esc(&node.msg.content),
         ));
@@ -943,7 +932,7 @@ fn render_tree(tree: &[Node]) -> String {
 fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let params = parse_query(query);
     let after = param_i64(&params, "after")?;
-    let author = params.get("author").map(|s| percent_decode(s));
+    let agent_id = params.get("agent_id").map(|s| percent_decode(s));
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
@@ -953,7 +942,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let msgs = feed_query(
         &conn,
         after,
-        author.as_deref(),
+        agent_id.as_deref(),
         agent_hash.as_deref(),
         limit,
     )?;
@@ -982,20 +971,12 @@ fn post_message(
     db: &str,
     write_lock: &Mutex<()>,
 ) -> Result<HttpReply, HttpError> {
-    let secret = agent_secret(req)?;
-    let agent_hash = secret.as_deref().map(hash_secret);
+    // The board is agent-only: every post needs a valid identity secret.
+    let secret = agent_secret_required(req)?;
+    let agent_hash = hash_secret(&secret);
     let body = read_body(req)?;
     let value: Value =
         serde_json::from_str(&body).map_err(|_| HttpError::bad_request("invalid JSON body"))?;
-    let author = value
-        .get("author")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| HttpError::bad_request("author is required (1-50 chars)"))?;
-    if author.len() > MAX_AUTHOR {
-        return Err(HttpError::bad_request("author too long (max 50 chars)"));
-    }
     let content = value
         .get("content")
         .and_then(Value::as_str)
@@ -1045,8 +1026,8 @@ fn post_message(
     let ts = now();
     let last: Option<i64> = conn
         .query_row(
-            "SELECT MAX(created_at) FROM messages WHERE author = ?1",
-            [author],
+            "SELECT MAX(created_at) FROM messages WHERE agent_hash = ?1",
+            [&agent_hash],
             |r| r.get::<_, Option<i64>>(0),
         )
         .optional()?
@@ -1062,14 +1043,14 @@ fn post_message(
             .ok_or_else(|| HttpError::bad_request("parent does not exist"))?,
         None => 0,
     };
-    // An agent post carries a permanent public identity; mint it on first use.
-    if let Some(hash) = agent_hash.as_deref() {
-        ensure_agent_id(&conn, hash)?;
-    }
+    // Every post carries a permanent public identity; mint it on first use.
+    ensure_agent_id(&conn, &agent_hash)?;
+    // The author column is retired (agent-only board); keep it populated so
+    // the NOT NULL column stays happy, but it is never read or returned.
     conn.execute(
         "INSERT INTO messages(parent_id, root_id, author, title, content, agent_hash, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![parent_id, root_id, author, title, content, agent_hash, ts],
+         VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+        params![parent_id, root_id, title, content, agent_hash, ts],
     )?;
     let id = conn.last_insert_rowid();
     if parent_id.is_none() {
@@ -1188,7 +1169,6 @@ mod tests {
         assert_eq!(root, Some(id));
         let msg = get_message(&conn, id).unwrap();
         assert_eq!(msg.id, id);
-        assert_eq!(msg.author, "alice");
         assert_eq!(msg.content, "hello");
         assert!(!msg.agent);
         assert_eq!(msg.root_id, id);
@@ -1201,7 +1181,6 @@ mod tests {
             id,
             parent_id: parent,
             root_id: 1,
-            author: "a".into(),
             title: Some("t".into()),
             content: "c".into(),
             agent: false,
