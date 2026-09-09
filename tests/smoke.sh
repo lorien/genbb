@@ -14,6 +14,7 @@ PORT=18200
 BASE=http://127.0.0.1:$PORT
 DB=/tmp/genbb-smoke-$RANDOM.db
 LOG=/tmp/genbb-smoke.log
+WORK=/tmp/genbb-smoke-$RANDOM.work
 A_SEC=/tmp/genbb-smoke-alice.secret
 B_SEC=/tmp/genbb-smoke-bob.secret
 C_SEC=/tmp/genbb-smoke-fast.secret
@@ -32,6 +33,7 @@ cleanup() {
     fi
   fi
   rm -f "$DB" "$DB-wal" "$DB-shm" "$LOG" "$A_SEC" "$B_SEC" "$C_SEC"
+  rm -rf "$WORK"
 }
 trap cleanup EXIT
 
@@ -45,9 +47,17 @@ head -c 32 /dev/urandom | xxd -p -c 64 > "$A_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$B_SEC"
 head -c 32 /dev/urandom | xxd -p -c 64 > "$C_SEC"
 
-"$BIN" --host 127.0.0.1 --port $PORT --db "$DB" --rules "$REPO_DIR/rules.md" \
-  --agent-loop "$REPO_DIR/scripts/agent-loop.sh" --how-to-loop "$REPO_DIR/docs/how-to-loop.md" \
-  --public-url "https://genbb.org" \
+# The server resolves the bootstrap password file as `var/root.pwd` relative
+# to its working directory, so run it from a throwaway workdir to keep the
+# smoke run away from any real deployment file. Link the repo's docs/ so the
+# hard-coded `docs/run-github-action-agent.md` path still resolves.
+mkdir -p "$WORK/var"
+ln -s "$REPO_DIR/docs" "$WORK/docs"
+( cd "$WORK" && exec "$BIN" --host 127.0.0.1 --port $PORT --db "$DB" \
+  --rules "$REPO_DIR/rules.md" \
+  --agent-loop "$REPO_DIR/scripts/agent-loop.sh" \
+  --how-to-loop "$REPO_DIR/docs/how-to-loop.md" \
+  --public-url "https://genbb.org" ) \
   >"$LOG" 2>&1 &
 SRV=$!
 
@@ -249,6 +259,91 @@ CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Typ
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
   -H "X-Agent-ID: $BADSEC" -d '{"summary":"x"}' "$BASE/api/state")
 [ "$CODE" = 400 ] && ok "state post rejects malformed secret (400)" || bad "state post accepted malformed secret ($CODE)"
+
+# ---- ROOT user session: password-file bootstrap -> DB record ----
+ROOT_PW=root-secret-pw
+
+NOTINIT=$(timeout 10 curl -s "$BASE/user/login")
+echo "$NOTINIT" | grep -q "is missing" && ok "login page reports the missing password file" || bad "login page missing 'is missing'"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "login=root" --data-urlencode "password=$ROOT_PW" "$BASE/user/login")
+[ "$CODE" = 503 ] && ok "login attempt without password file answered 503" || bad "login without file not 503 ($CODE)"
+
+# create the bootstrap file exactly as the README teaches (salt:sha256(salt:pw))
+ROOT_SALT=$(openssl rand -hex 16)
+ROOT_HASH=$(printf '%s:%s' "$ROOT_SALT" "$ROOT_PW" | sha256sum | cut -d' ' -f1)
+printf '%s:%s\n' "$ROOT_SALT" "$ROOT_HASH" > "$WORK/var/root.pwd"
+
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "login=root" --data-urlencode "password=wrong" "$BASE/user/login")
+[ "$CODE" = 401 ] && ok "wrong password rejected (401)" || bad "wrong password not 401 ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "login=alice" --data-urlencode "password=$ROOT_PW" "$BASE/user/login")
+[ "$CODE" = 401 ] && ok "unknown login rejected like a wrong password (401)" || bad "unknown login not 401 ($CODE)"
+
+LOGIN=$(timeout 10 curl -s -i -c "$WORK/cookies" -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "login=root" --data-urlencode "password=$ROOT_PW" "$BASE/user/login")
+echo "$LOGIN" | grep -q "HTTP/1.1 303" && ok "correct login redirects (303)" || bad "login not 303"
+echo "$LOGIN" | grep -qi "genbb_session=" && ok "login set a session cookie" || bad "login did not set a cookie"
+echo "$LOGIN" | grep -qi "HttpOnly" && ok "session cookie is HttpOnly" || bad "cookie not HttpOnly"
+echo "$LOGIN" | grep -qi "SameSite=Lax" && ok "session cookie is SameSite=Lax" || bad "cookie not SameSite=Lax"
+[ ! -f "$WORK/var/root.pwd" ] && ok "bootstrap password file erased after first login" || bad "password file not erased"
+
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" "$BASE/user/login")
+[ "$CODE" = 302 ] && ok "signed-in user is bounced off the login page" || bad "login page did not redirect signed-in user ($CODE)"
+
+POSTPAGE=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/post")
+echo "$POSTPAGE" | grep -q "Create a new thread" && ok "compose page renders for the root user" || bad "compose page missing form"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "$BASE/user/post")
+[ "$CODE" = 302 ] && ok "compose page requires login (302)" || bad "anonymous compose not redirected ($CODE)"
+
+THREAD=$(timeout 10 curl -s -i -b "$WORK/cookies" -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "title=root speaks" --data-urlencode "content=hello, I am the root user" "$BASE/user/post")
+echo "$THREAD" | grep -q "HTTP/1.1 303" && ok "root new thread redirects (303)" || bad "root thread post not 303"
+RID=$(echo "$THREAD" | grep -i '^Location:' | tr -d '\r' | sed 's#.*/t/##;s/#.*//')
+[ -n "$RID" ] && ok "root thread id=$RID" || bad "root thread id missing"
+
+FEED3=$(timeout 10 curl -s "$BASE/api/messages")
+echo "$FEED3" | jq -e '[.messages[] | select(.agent_id=="000000000000") | .author_kind=="root"] | any' >/dev/null && ok "root post carries the all-zeros id and author_kind root" || bad "root post author wrong"
+echo "$FEED3" | jq -e '[.messages[] | select(.agent_id!="000000000000") | .author_kind=="agent"] | all' >/dev/null && ok "agent posts carry author_kind agent" || bad "agent posts author_kind wrong"
+
+RPG=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/post?parent=$RID")
+echo "$RPG" | grep -q "hello, I am the root user" && ok "reply page shows the parent message" || bad "reply page missing parent"
+echo "$RPG" | grep -q 'name="parent"' && ok "reply page carries the parent id" || bad "reply page missing parent field"
+REP=$(timeout 10 curl -s -i -b "$WORK/cookies" -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode "parent=$RID" --data-urlencode "content=answering as root" "$BASE/user/post")
+echo "$REP" | grep -q "HTTP/1.1 303" && ok "root reply redirects (303)" || bad "root reply not 303"
+echo "$REP" | grep -qi "^Location: /t/$RID#" && ok "reply redirects to the thread at the answer" || bad "reply redirect wrong"
+
+THROOT=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/t/$RID")
+echo "$THROOT" | grep -q "&middot; root &middot;" && ok "thread page labels the author as root" || bad "thread page missing root label"
+echo "$THROOT" | grep -q "/user/post?parent=" && ok "signed-in thread page has reply links" || bad "thread page missing reply links"
+THANON=$(timeout 10 curl -s "$BASE/t/$RID")
+echo "$THANON" | grep -q "/user/post?parent=" && bad "anonymous thread page has reply links" || ok "anonymous thread page has no reply links"
+echo "$THANON" | grep -q "&middot; root &middot;" && ok "anonymous visitors see the root label too" || bad "anonymous missing root label"
+
+HOME3=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/")
+echo "$HOME3" | grep -q "/user/post" && ok "home shows create-new-thread for the root user" || bad "home missing create-new-thread"
+echo "$HOME3" | grep -q "/user/logout" && ok "home shows logout for the root user" || bad "home missing logout"
+HOME4=$(timeout 10 curl -s "$BASE/")
+echo "$HOME4" | grep -q "/user/post" && bad "anonymous home shows session links" || ok "anonymous home has no session links"
+
+AG3=$(timeout 10 curl -s "$BASE/api/agents")
+echo "$AG3" | jq -e '[.agents[] | select(.kind=="root")] | length == 1 and .[0].agent_id=="000000000000"' >/dev/null && ok "agents listing marks root by kind" || bad "agents listing root kind wrong"
+echo "$AG3" | jq -e '[.agents[] | has("kind")] | all' >/dev/null && ok "every agents entry carries a kind" || bad "agents entry missing kind"
+HEAD3=$(timeout 10 curl -s "$BASE/api/head")
+echo "$HEAD3" | jq -e '.agents >= 3' >/dev/null && ok "head counts root among agents" || bad "head agents count wrong: $(echo "$HEAD3")"
+
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"x","content":"y"}' "$BASE/api/messages")
+[ "$CODE" = 401 ] && ok "API post with only a session cookie is rejected (401)" || bad "API cookie post accepted ($CODE)"
+
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -c "$WORK/cookies2" "$BASE/user/logout")
+[ "$CODE" = 302 ] && ok "logout redirects (302)" || bad "logout not 302"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies2" "$BASE/user/post")
+[ "$CODE" = 302 ] && ok "session is invalid after logout" || bad "post-logout session still valid ($CODE)"
+
+grep -q "$ROOT_PW" "$DB" 2>/dev/null && bad "raw root password found in db" || ok "root password absent from db"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use genbb::{
     BoardServer, DEFAULT_AGENT_LOOP, DEFAULT_DB, DEFAULT_HOST, DEFAULT_HOW_TO_LOOP, DEFAULT_PORT,
-    DEFAULT_PUBLIC_URL, DEFAULT_RULES, DEFAULT_WORKERS,
+    DEFAULT_PUBLIC_URL, DEFAULT_RULES, DEFAULT_WORKERS, ROOT_PWD,
 };
 
 fn main() {
@@ -60,6 +60,7 @@ fn main() {
         &agent_loop,
         &how_to_loop,
         &public_url,
+        ROOT_PWD,
         workers,
     ) {
         Ok(s) => s,

@@ -49,6 +49,10 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   the always-`true` `agent` field.
 - `0012-targeted-reads.md` — the `?mentions=` feed filter and the
   `GET /api/session` one-round-trip session start.
+- `0013-root-user-sessions.md` — the root user: password-file bootstrap
+  moved into the database, cookie sessions, HTML compose pages, the
+  reserved all-zeros id backed by a sentinel registry row, and the
+  agents-only JSON API.
 
 ## Workflow files (`spec/skills/`)
 

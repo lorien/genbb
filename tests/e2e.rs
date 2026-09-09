@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use genbb::{BoardServer, hash_secret};
+use genbb::{BoardServer, ROOT_ID, hash_secret};
 
 // Valid 64-hex agent secrets, as `openssl rand -hex 32` prints.
 const SECRET_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -32,6 +32,7 @@ struct TestServer {
     rules_path: String,
     loop_path: String,
     how_to_loop_path: String,
+    root_pwd_path: String,
 }
 
 impl TestServer {
@@ -67,6 +68,7 @@ impl TestServer {
         public_url: &str,
     ) -> Self {
         let db = temp_db();
+        let root_pwd = temp_root_pwd();
         let server = BoardServer::start(
             "127.0.0.1",
             0,
@@ -75,6 +77,7 @@ impl TestServer {
             loop_path,
             how_to_loop_path,
             public_url,
+            &root_pwd,
             2,
         )
         .unwrap();
@@ -84,12 +87,19 @@ impl TestServer {
             rules_path: rules_path.to_string(),
             loop_path: loop_path.to_string(),
             how_to_loop_path: how_to_loop_path.to_string(),
+            root_pwd_path: root_pwd,
         }
     }
 
     fn addr(&self) -> String {
         self.server.addr().to_string()
     }
+}
+
+fn temp_root_pwd() -> String {
+    let n = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("genbb-e2e-pwd-{}-{}.pwd", std::process::id(), n));
+    path.to_string_lossy().into_owned()
 }
 
 fn temp_rules(content: &str) -> String {
@@ -122,6 +132,7 @@ impl Drop for TestServer {
         let _ = std::fs::remove_file(&self.rules_path);
         let _ = std::fs::remove_file(&self.loop_path);
         let _ = std::fs::remove_file(&self.how_to_loop_path);
+        let _ = std::fs::remove_file(&self.root_pwd_path);
     }
 }
 
@@ -1236,4 +1247,414 @@ fn session_requires_header() {
     let s = TestServer::start();
     let a = s.addr();
     assert_eq!(http(&a, "GET", "/api/session", &[], None).status, 401);
+}
+
+// ---- root user sessions ----
+
+const PWD_SALT: &str = "a1b2c3d4e5f60718a1b2c3d4e5f60718";
+const ROOT_PASSWORD: &str = "root-secret";
+
+fn encode_component(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn form_post(addr: &str, path: &str, fields: &[(&str, &str)], cookie: Option<&str>) -> HttpResp {
+    let body: Vec<String> = fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", encode_component(k), encode_component(v)))
+        .collect();
+    let body = body.join("&");
+    let mut headers: Vec<(&str, &str)> =
+        vec![("Content-Type", "application/x-www-form-urlencoded")];
+    if let Some(c) = cookie {
+        headers.push(("Cookie", c));
+    }
+    http(addr, "POST", path, &headers, Some(&body))
+}
+
+fn location(resp: &HttpResp) -> Option<String> {
+    resp.headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+        .map(|(_, v)| v.clone())
+}
+
+fn set_cookie(resp: &HttpResp) -> Option<String> {
+    resp.headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+        .map(|(_, v)| v.clone())
+}
+
+fn cookie_value(sc: &str) -> String {
+    sc.split(';')
+        .next()
+        .and_then(|p| p.split_once('='))
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default()
+}
+
+/// The full `Cookie` header value the browser would send for a session token.
+fn session_cookie(token: &str) -> String {
+    format!("genbb_session={token}")
+}
+
+/// Write a bootstrap password file exactly as the documented command line does:
+/// `{salt}:{sha256(salt:password)}`.
+fn write_root_pwd(path: &str, salt: &str, password: &str) {
+    let hash = hash_secret(&format!("{salt}:{password}"));
+    std::fs::write(path, format!("{salt}:{hash}\n")).unwrap();
+}
+
+#[test]
+fn login_page_reports_missing_password_file() {
+    let s = TestServer::start();
+    let a = s.addr();
+    // No root record and no password file: the GET form explains that.
+    let get = http(&a, "GET", "/user/login", &[], None);
+    assert_eq!(get.status, 200);
+    assert!(get.body.contains("is missing"), "body: {}", get.body);
+    // A login attempt is answered the same way.
+    let post = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", "x")],
+        None,
+    );
+    assert_eq!(post.status, 503);
+    assert!(post.body.contains("is missing"));
+}
+
+#[test]
+fn login_rejects_wrong_credentials_uniformly() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+    let wrong_pw = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", "nope")],
+        None,
+    );
+    assert_eq!(wrong_pw.status, 401);
+    assert!(wrong_pw.body.contains("invalid login or password"));
+    // An unknown login gets the exact same error (no user enumeration).
+    let wrong_user = form_post(
+        &a,
+        "/user/login",
+        &[("login", "alice"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    assert_eq!(wrong_user.status, 401);
+    assert!(wrong_user.body.contains("invalid login or password"));
+    // Nothing was created on failure: the bootstrap file is still there.
+    assert!(std::path::Path::new(&s.root_pwd_path).exists());
+}
+
+#[test]
+fn first_login_migrates_password_file_and_starts_session() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+
+    let login = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    assert_eq!(login.status, 303);
+    assert_eq!(location(&login).as_deref(), Some("/"));
+    let sc = set_cookie(&login).expect("set-cookie header");
+    assert!(sc.contains("genbb_session="), "cookie: {sc}");
+    assert!(sc.contains("HttpOnly"));
+    assert!(sc.contains("SameSite=Lax"));
+    assert!(sc.contains("Path=/"));
+    let token = cookie_value(&sc);
+    assert!(!token.is_empty());
+
+    // The bootstrap file is gone and the credential lives in the database
+    // under a fresh random salt (not the one we wrote).
+    assert!(!std::path::Path::new(&s.root_pwd_path).exists());
+    let conn = rusqlite::Connection::open(&s.db_path).unwrap();
+    let (db_salt, db_hash): (String, String) = conn
+        .query_row(
+            "SELECT salt, hash FROM users WHERE username = 'root'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(db_salt, PWD_SALT);
+    assert_eq!(hash_secret(&format!("{db_salt}:{ROOT_PASSWORD}")), db_hash);
+
+    // A second login verifies against the database.
+    let again = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    assert_eq!(again.status, 303);
+
+    // Logged in: GET /user/login bounces to home.
+    let authed = http(
+        &a,
+        "GET",
+        "/user/login",
+        &[("Cookie", &session_cookie(&token))],
+        None,
+    );
+    assert_eq!(authed.status, 302);
+    assert_eq!(location(&authed).as_deref(), Some("/"));
+}
+
+#[test]
+fn root_posts_through_forms_and_is_a_distinct_author() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+
+    // Anonymous cannot reach the compose page.
+    let anon = http(&a, "GET", "/user/post", &[], None);
+    assert_eq!(anon.status, 302);
+    assert_eq!(location(&anon).as_deref(), Some("/user/login"));
+    // Anonymous home carries no session links.
+    let home_anon = http(&a, "GET", "/", &[], None);
+    assert!(!home_anon.body.contains("/user/post"));
+    assert!(!home_anon.body.contains("/user/logout"));
+
+    let login = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    let cookie = cookie_value(&set_cookie(&login).unwrap());
+
+    // Logged-in home shows the create-thread and logout links.
+    let home = http(
+        &a,
+        "GET",
+        "/",
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert!(home.body.contains("/user/post"));
+    assert!(home.body.contains("/user/logout"));
+
+    // Start a new thread via the form.
+    let thread = form_post(
+        &a,
+        "/user/post",
+        &[
+            ("title", "root speaks"),
+            ("content", "hello board, I am root"),
+        ],
+        Some(&session_cookie(&cookie)),
+    );
+    assert_eq!(thread.status, 303);
+    let root_id = location(&thread)
+        .unwrap()
+        .split('/')
+        .nth(2)
+        .unwrap()
+        .split('#')
+        .next()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+
+    // The JSON feed carries the reserved all-zeros id and author_kind root.
+    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let m = &msgs(&feed)[0];
+    assert_eq!(m["agent_id"].as_str(), Some(ROOT_ID));
+    assert_eq!(m["author_kind"].as_str(), Some("root"));
+    // An agent's post stays author_kind agent.
+    post_json(&a, r#"{"content":"an agent replies"}"#, SECRET_A);
+    let list = msgs(&http(&a, "GET", "/api/messages", &[], None));
+    assert!(list.iter().any(|x| x["author_kind"] == "agent"));
+    assert_eq!(
+        list.iter().filter(|x| x["author_kind"] == "root").count(),
+        1
+    );
+
+    // The reply page shows the parent message above the form.
+    let reply_page = http(
+        &a,
+        "GET",
+        &format!("/user/post?parent={root_id}"),
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert_eq!(reply_page.status, 200);
+    assert!(reply_page.body.contains("hello board, I am root"));
+    assert!(reply_page.body.contains("root &middot;"));
+    assert!(
+        reply_page
+            .body
+            .contains(&format!(r#"name="parent" value="{root_id}""#))
+    );
+
+    // Post the reply: redirect to the thread at our answer; root is exempt
+    // from the 5-second per-identity rate limit (immediate second post).
+    let reply = form_post(
+        &a,
+        "/user/post",
+        &[
+            ("parent", &root_id.to_string()),
+            ("content", "answering as root"),
+        ],
+        Some(&session_cookie(&cookie)),
+    );
+    assert_eq!(reply.status, 303);
+    let loc = location(&reply).unwrap();
+    assert!(loc.starts_with(&format!("/t/{root_id}#")), "loc: {loc}");
+
+    // Logged-in thread page shows reply links; anonymous does not.
+    let t_authed = http(
+        &a,
+        "GET",
+        &format!("/t/{root_id}"),
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert!(t_authed.body.contains("/user/post?parent="));
+    let t_anon = http(&a, "GET", &format!("/t/{root_id}"), &[], None);
+    assert!(!t_anon.body.contains("/user/post?parent="));
+
+    // Presence: root is listed as kind root once it has posted, and head
+    // counts it.
+    let agents = body_json(&http(&a, "GET", "/api/agents", &[], None));
+    let list = agents["agents"].as_array().unwrap();
+    let root = list
+        .iter()
+        .find(|e| e["kind"] == "root")
+        .expect("root present");
+    assert_eq!(root["agent_id"], ROOT_ID);
+    assert!(list.iter().all(|e| e.get("kind").is_some()));
+    let head = body_json(&http(&a, "GET", "/api/head", &[], None));
+    assert!(head["agents"].as_i64().unwrap() >= 1);
+
+    // The JSON API never accepts a session cookie: a cookie-only POST is 401.
+    let api = http(
+        &a,
+        "POST",
+        "/api/messages",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &session_cookie(&cookie)),
+        ],
+        Some(r#"{"title":"x","content":"y"}"#),
+    );
+    assert_eq!(api.status, 401);
+}
+
+#[test]
+fn compose_validation_and_parent_errors_rerender() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+    let login = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    let cookie = cookie_value(&set_cookie(&login).unwrap());
+
+    // Top-level without a title -> 400, form kept.
+    let no_title = form_post(
+        &a,
+        "/user/post",
+        &[("content", "missing title")],
+        Some(&session_cookie(&cookie)),
+    );
+    assert_eq!(no_title.status, 400);
+    assert!(no_title.body.contains("title"));
+
+    let thread = form_post(
+        &a,
+        "/user/post",
+        &[("title", "t"), ("content", "c")],
+        Some(&session_cookie(&cookie)),
+    );
+    let root_id = location(&thread)
+        .unwrap()
+        .split('/')
+        .nth(2)
+        .unwrap()
+        .split('#')
+        .next()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+
+    // Reply carrying a title -> 400.
+    let titled_reply = form_post(
+        &a,
+        "/user/post",
+        &[
+            ("parent", &root_id.to_string()),
+            ("title", "nope"),
+            ("content", "c"),
+        ],
+        Some(&session_cookie(&cookie)),
+    );
+    assert_eq!(titled_reply.status, 400);
+    assert!(titled_reply.body.contains("replies cannot have a title"));
+
+    // Nonexistent parent -> 400.
+    let bad_parent = form_post(
+        &a,
+        "/user/post",
+        &[("parent", "999999"), ("content", "c")],
+        Some(&session_cookie(&cookie)),
+    );
+    assert_eq!(bad_parent.status, 400);
+    assert!(bad_parent.body.contains("parent does not exist"));
+}
+
+#[test]
+fn logout_clears_the_session() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+    let login = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    let cookie = cookie_value(&set_cookie(&login).unwrap());
+
+    let out = http(
+        &a,
+        "GET",
+        "/user/logout",
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert_eq!(out.status, 302);
+    let sc = set_cookie(&out).expect("clear cookie");
+    assert!(sc.contains("Max-Age=0"));
+
+    let comp = http(
+        &a,
+        "GET",
+        "/user/post",
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert_eq!(comp.status, 302);
+    assert_eq!(location(&comp).as_deref(), Some("/user/login"));
 }
