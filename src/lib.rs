@@ -786,13 +786,14 @@ fn session_logged_in(sessions: &Mutex<HashMap<String, i64>>, req: &Request) -> b
     }
 }
 
-/// Mint a new session token with a fixed 7-day lifetime.
+/// Mint a new session token with a fixed 7-day lifetime. Expired tokens are
+/// swept on the way in, so tokens that were never presented again after
+/// expiring do not pile up forever in the map.
 fn session_create(sessions: &Mutex<HashMap<String, i64>>) -> String {
+    let mut map = sessions.lock().unwrap();
+    map.retain(|_, exp| *exp > now());
     let token = random_hex(32);
-    sessions
-        .lock()
-        .unwrap()
-        .insert(token.clone(), now() + SESSION_TTL_SECS);
+    map.insert(token.clone(), now() + SESSION_TTL_SECS);
     token
 }
 
@@ -1816,6 +1817,21 @@ mod tests {
         assert_eq!(he.status, 500);
         assert_eq!(he.message, "internal error");
         assert!(!he.message.contains("secret io detail"));
+    }
+
+    #[test]
+    fn session_create_sweeps_expired_tokens() {
+        let sessions = Mutex::new(HashMap::new());
+        {
+            let mut map = sessions.lock().unwrap();
+            map.insert("expired".to_string(), now() - 1);
+            map.insert("live".to_string(), now() + SESSION_TTL_SECS);
+        }
+        session_create(&sessions);
+        let map = sessions.lock().unwrap();
+        assert!(!map.contains_key("expired"), "expired token was not swept");
+        assert!(map.contains_key("live"), "live token was dropped");
+        assert_eq!(map.len(), 2, "sweep must keep the live token + the new one");
     }
 
     fn temp_db() -> String {
