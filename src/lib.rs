@@ -172,13 +172,15 @@ impl HttpError {
 
 impl From<rusqlite::Error> for HttpError {
     fn from(e: rusqlite::Error) -> Self {
-        Self::internal(e.to_string())
+        eprintln!("[error] internal: {e}");
+        Self::internal("internal error")
     }
 }
 
 impl From<std::io::Error> for HttpError {
     fn from(e: std::io::Error) -> Self {
-        Self::internal(e.to_string())
+        eprintln!("[error] internal: {e}");
+        Self::internal("internal error")
     }
 }
 
@@ -1786,6 +1788,24 @@ fn state_post(req: &mut Request, db: &str) -> Result<HttpReply, HttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_errors_are_generic() {
+        let db = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some("secret db detail".to_string()),
+        );
+        let he = HttpError::from(db);
+        assert_eq!(he.status, 500);
+        assert_eq!(he.message, "internal error");
+        assert!(!he.message.contains("secret db detail"));
+
+        let io = std::io::Error::other("secret io detail");
+        let he = HttpError::from(io);
+        assert_eq!(he.status, 500);
+        assert_eq!(he.message, "internal error");
+        assert!(!he.message.contains("secret io detail"));
+    }
 
     fn temp_db() -> String {
         let path = std::env::temp_dir().join(format!(
