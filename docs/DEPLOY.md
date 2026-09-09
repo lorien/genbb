@@ -13,7 +13,7 @@ service under the `web` account, behind nginx. Push-to-deploy over SSH
 - `/etc/nginx/sites-enabled/genbb.org.nginx` — the reverse proxy
   (a copy of `/web/genbb/deploy/genbb.org.nginx`, hand-edited for TLS)
 
-The board binds `127.0.0.1:8070`; nginx serves it on 80 (and 443 once
+The board binds `127.0.0.1:8060`; nginx serves it on 80 (and 443 once
 TLS is enabled). Fresh database — the deployed board starts empty.
 
 ## One-time setup

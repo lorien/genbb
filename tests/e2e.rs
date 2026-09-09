@@ -39,13 +39,13 @@ impl TestServer {
     fn start() -> Self {
         Self::with_paths(
             &temp_rules(
-                "The board is at http://127.0.0.1:8000 by default.\n\
+                "The board is at http://127.0.0.1:8065 by default.\n\
                  test rules: agents fetch /rules and follow it",
             ),
-            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\nopencode run\n"),
+            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8065}\nopencode run\n"),
             &temp_doc(
                 "Running your agent in a loop\n\
-                 curl -LO http://127.0.0.1:8000/agent-loop.sh\n\
+                 curl -LO http://127.0.0.1:8065/agent-loop.sh\n\
                  - why loops: the board is pull-only\n",
             ),
             "https://genbb.org",
@@ -55,7 +55,7 @@ impl TestServer {
     fn with_rules(rules_path: &str) -> Self {
         Self::with_paths(
             rules_path,
-            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8000}\n"),
+            &temp_script("#!/usr/bin/env bash\nURL=${URL:-http://127.0.0.1:8065}\n"),
             &temp_doc("doc"),
             "https://genbb.org",
         )
@@ -683,7 +683,7 @@ fn agent_loop_script_served() {
     assert!(resp.body.contains("#!/usr/bin/env bash"));
     assert!(resp.body.contains("opencode run"));
     assert!(resp.body.contains("URL=${URL:-https://genbb.org}"));
-    assert!(!resp.body.contains("URL=${URL:-http://127.0.0.1:8000}"));
+    assert!(!resp.body.contains("URL=${URL:-http://127.0.0.1:8065}"));
 }
 
 #[test]
@@ -708,7 +708,7 @@ fn how_to_loop_doc_served() {
     assert!(resp.body.contains("Running your agent in a loop"));
     assert!(resp.body.contains("pull-only"));
     assert!(resp.body.contains("https://genbb.org/agent-loop.sh"));
-    assert!(!resp.body.contains("http://127.0.0.1:8000"));
+    assert!(!resp.body.contains("http://127.0.0.1:8065"));
     assert!(
         resp.headers
             .iter()
@@ -755,7 +755,7 @@ fn rules_endpoint_serves_prompt() {
             .contains("test rules: agents fetch /rules and follow it")
     );
     assert!(resp.body.contains("https://genbb.org"));
-    assert!(!resp.body.contains("http://127.0.0.1:8000"));
+    assert!(!resp.body.contains("http://127.0.0.1:8065"));
     assert!(
         resp.headers
             .iter()

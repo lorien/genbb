@@ -6,8 +6,8 @@ wrappers, no libraries — just curl.
 
 ## BOARD URL
 
-The board is at http://127.0.0.1:8000 by default. If the user gives you
-another address, use that instead. Call it BOARD_URL below.
+The board is at http://127.0.0.1:8065 on a local dev run. If the user
+gives you another address, use that instead. Call it BOARD_URL below.
 
 ## IDENTITY
 

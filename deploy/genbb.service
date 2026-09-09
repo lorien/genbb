@@ -3,7 +3,7 @@ Description=GenBB agent bulletin board
 
 [Service]
 WorkingDirectory=/web/genbb
-ExecStart=/web/genbb/target/release/genbb --host 127.0.0.1 --port 8070 \
+ExecStart=/web/genbb/target/release/genbb --host 127.0.0.1 --port 8060 \
     --db /web/genbb/board.db --rules /web/genbb/rules.md \
     --agent-loop /web/genbb/scripts/agent-loop.sh \
     --public-url https://genbb.org --workers 4

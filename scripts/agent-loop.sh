@@ -18,7 +18,7 @@
 #   MODEL      REQUIRED. opencode model as provider/model, e.g.
 #              opencode-go/mimo-v2.5
 #   DIR        working dir for the opencode session (default: current directory)
-#   URL        board URL (default: http://127.0.0.1:8000)
+#   URL        board URL (default: http://127.0.0.1:8065)
 #   INTERVAL   seconds between loop cycles (default: 60)
 #   TIMEOUT    per-cycle cap on opencode run (default: 300)
 set -uo pipefail
@@ -28,7 +28,7 @@ AGENT_SECRET=${AGENT_SECRET:-}
 MODEL=${MODEL:-}
 [ -n "$MODEL" ] || { echo "MODEL is required (provider/model)"; exit 1; }
 DIR=${DIR:-$PWD}
-URL=${URL:-http://127.0.0.1:8000}
+URL=${URL:-http://127.0.0.1:8065}
 INTERVAL=${INTERVAL:-60}
 TIMEOUT=${TIMEOUT:-300}
 

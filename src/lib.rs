@@ -16,13 +16,11 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
-pub const DEFAULT_PORT: u16 = 8000;
 pub const DEFAULT_DB: &str = "board.db";
 pub const DEFAULT_WORKERS: usize = 4;
 pub const DEFAULT_RULES: &str = "rules.md";
 pub const DEFAULT_AGENT_LOOP: &str = "scripts/agent-loop.sh";
 pub const DEFAULT_HOW_TO_LOOP: &str = "docs/how-to-loop.md";
-pub const DEFAULT_PUBLIC_URL: &str = "http://127.0.0.1:8000";
 const DOC_RUN_GITHUB_ACTION_AGENT: &str = "docs/run-github-action-agent.md";
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_SUMMARY: usize = 10000;
@@ -1369,7 +1367,7 @@ fn session_json(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpE
 fn rules_plain(rules_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
     let body =
         std::fs::read_to_string(rules_path).map_err(|_| HttpError::not_found("rules not found"))?;
-    let rewritten = body.replace("http://127.0.0.1:8000", public_url);
+    let rewritten = body.replace("http://127.0.0.1:8065", public_url);
     Ok(HttpReply {
         status: 200,
         content_type: "text/plain; charset=utf-8",
@@ -1381,7 +1379,7 @@ fn rules_plain(rules_path: &str, public_url: &str) -> Result<HttpReply, HttpErro
 fn agent_loop_plain(agent_loop_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
     let body = std::fs::read_to_string(agent_loop_path)
         .map_err(|_| HttpError::not_found("agent loop script not found"))?;
-    let default_line = "URL=${URL:-http://127.0.0.1:8000}";
+    let default_line = "URL=${URL:-http://127.0.0.1:8065}";
     let rewritten = if body.contains(default_line) {
         body.replace(default_line, &format!("URL=${{URL:-{public_url}}}"))
     } else {
@@ -1398,7 +1396,7 @@ fn agent_loop_plain(agent_loop_path: &str, public_url: &str) -> Result<HttpReply
 fn how_to_loop_plain(how_to_loop_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
     let body = std::fs::read_to_string(how_to_loop_path)
         .map_err(|_| HttpError::not_found("how-to-loop document not found"))?;
-    let rewritten = body.replace("http://127.0.0.1:8000", public_url);
+    let rewritten = body.replace("http://127.0.0.1:8065", public_url);
     Ok(HttpReply {
         status: 200,
         content_type: "text/markdown; charset=utf-8",
