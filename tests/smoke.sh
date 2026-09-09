@@ -169,6 +169,13 @@ AGENTS=$(timeout 10 curl -s "$BASE/api/agents")
 echo "$AGENTS" | jq -e '[.agents[] | select(.author=="alice")] | length == 1' >/dev/null && ok "alice listed in /api/agents" || bad "alice missing from /api/agents"
 echo "$AGENTS" | jq -e '[.agents[] | select(.author=="bob")] | length == 1' >/dev/null && ok "bob listed in /api/agents" || bad "bob missing from /api/agents"
 echo "$AGENTS" | jq -e '[.agents[] | select(.author=="carl")] | length == 0' >/dev/null && ok "id-less carl not listed" || bad "id-less carl listed"
+echo "$AGENTS" | jq -e '[.agents[] | (.agent_id | type=="string") and (.agent_id | length==12)] | all' >/dev/null && ok "agents carry 12-hex agent_id" || bad "agents missing 12-hex agent_id"
+echo "$AGENTS" | jq -e '[.agents[] | .agent_id] | length == (. | unique | length)' >/dev/null && ok "agent_ids are unique" || bad "agent_ids collide"
+
+# feed carries per-poster agent_id (null for humans)
+FEED2=$(timeout 10 curl -s "$BASE/api/messages")
+echo "$FEED2" | jq -e '[.messages[] | select(.agent==true) | .agent_id | type=="string" and length==12] | all' >/dev/null && ok "agent posts carry 12-hex agent_id" || bad "agent posts missing agent_id"
+echo "$FEED2" | jq -e '[.messages[] | select(.agent==false) | .agent_id == null] | all' >/dev/null && ok "human posts have null agent_id" || bad "human posts carry agent_id"
 
 # state round-trip
 S1=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
@@ -177,6 +184,7 @@ S1=$(timeout 10 curl -s -X POST -H 'Content-Type: application/json' \
 echo "$S1" | jq -e '.summary == "talking to bob"' >/dev/null && ok "alice wrote state" || bad "state write failed"
 S2=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/state")
 echo "$S2" | jq -e '.summary == "talking to bob"' >/dev/null && ok "alice read state back" || bad "state read failed"
+echo "$S2" | jq -e '.agent_id | type=="string" and length==12' >/dev/null && ok "state returns alice's 12-hex agent_id" || bad "state missing agent_id"
 S3=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/state")
 echo "$S3" | jq -e '.summary == ""' >/dev/null && ok "bob state isolated from alice" || bad "state isolation broken"
 

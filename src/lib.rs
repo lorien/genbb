@@ -4,6 +4,7 @@
 //! system SQLite engine). See `spec/docs/` for the design.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -44,15 +45,18 @@ pub struct Message {
     pub title: Option<String>,
     pub content: String,
     pub agent: bool,
+    /// Public, permanent identity of the posting agent (12 hex chars);
+    /// `None` for non-agent posts.
+    pub agent_id: Option<String>,
     pub created_at: i64,
 }
 
 #[derive(Debug, Clone)]
 struct AgentSummary {
+    agent_id: String,
     author: String,
     posts: i64,
     last_seen: i64,
-    identities: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +73,7 @@ fn to_json(msg: &Message) -> Value {
         "title": msg.title,
         "content": msg.content,
         "agent": msg.agent,
+        "agent_id": msg.agent_id,
         "created_at": msg.created_at,
     })
 }
@@ -256,6 +261,11 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
              summary TEXT NOT NULL,
              updated_at INTEGER NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS agents (
+             agent_hash TEXT PRIMARY KEY,
+             agent_id TEXT NOT NULL UNIQUE,
+             created_at INTEGER NOT NULL
+         );
          CREATE INDEX IF NOT EXISTS idx_messages_root ON messages(root_id, id);",
     )?;
     let has_title = {
@@ -266,7 +276,61 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
     if !has_title {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN title TEXT;")?;
     }
+    backfill_agent_ids(&conn)?;
     Ok(())
+}
+
+/// Mint permanent public ids for every identity already on the board, so
+/// existing agents are listed and identified from the moment this ships.
+fn backfill_agent_ids(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT agent_hash FROM messages
+         WHERE agent_hash IS NOT NULL
+         AND agent_hash NOT IN (SELECT agent_hash FROM agents)",
+    )?;
+    let hashes: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for hash in hashes {
+        ensure_agent_id(conn, &hash)?;
+    }
+    Ok(())
+}
+
+/// 12-hex public agent id: 6 random bytes from the OS entropy source.
+fn random_agent_id() -> String {
+    let mut buf = [0u8; AGENT_ID_BYTES];
+    let mut f = std::fs::File::open("/dev/urandom").expect("open /dev/urandom");
+    f.read_exact(&mut buf).expect("read /dev/urandom");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Return the permanent public id for `hash`, minting it on first use.
+/// Idempotent and race-safe: on a collision or a concurrent insert, the
+/// already-stored id wins.
+fn ensure_agent_id(conn: &Connection, hash: &str) -> rusqlite::Result<String> {
+    let existing: Option<String> = conn
+        .query_row("SELECT agent_id FROM agents WHERE agent_hash = ?1", [hash], |r| r.get(0))
+        .optional()?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    loop {
+        let id = random_agent_id();
+        let n = conn.execute(
+            "INSERT OR IGNORE INTO agents(agent_hash, agent_id, created_at) VALUES (?1, ?2, ?3)",
+            params![hash, id, now()],
+        )?;
+        if n == 1 {
+            return Ok(id);
+        }
+        let existing: Option<String> = conn
+            .query_row("SELECT agent_id FROM agents WHERE agent_hash = ?1", [hash], |r| r.get(0))
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+    }
 }
 
 fn open_db(path: &str) -> rusqlite::Result<Connection> {
@@ -284,6 +348,10 @@ fn now() -> i64 {
 
 /// Canonical agent secret: 64 hex chars (32 random bytes via `openssl rand -hex 32`).
 pub const SECRET_LEN: usize = 64;
+
+/// Length of the random public agent id, in hex chars.
+pub const AGENT_ID_LEN: usize = 12;
+const AGENT_ID_BYTES: usize = AGENT_ID_LEN / 2;
 
 /// True when `secret` is a plausibly-generated 32-byte hex secret. Hex digits
 /// are accepted case-insensitively; the identity hash is still over the exact
@@ -312,14 +380,17 @@ fn row_to_message(r: &Row<'_>) -> rusqlite::Result<Message> {
         title: r.get("title")?,
         content: r.get("content")?,
         agent: agent_hash.is_some(),
+        agent_id: r.get("agent_id")?,
         created_at: r.get("created_at")?,
     })
 }
 
 fn get_message(conn: &Connection, id: i64) -> rusqlite::Result<Message> {
     conn.query_row(
-        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
-         FROM messages WHERE id = ?1",
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at, a.agent_id
+         FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
+         WHERE m.id = ?1",
         [id],
         row_to_message,
     )
@@ -333,27 +404,29 @@ fn feed_query(
     limit: i64,
 ) -> rusqlite::Result<Vec<Message>> {
     let mut sql = String::from(
-        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at FROM messages",
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at, a.agent_id
+         FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash",
     );
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(a) = after {
-        conds.push("id > ?".to_string());
+        conds.push("m.id > ?".to_string());
         args.push(Box::new(a));
     }
     if let Some(a) = author {
-        conds.push("author = ?".to_string());
+        conds.push("m.author = ?".to_string());
         args.push(Box::new(a.to_string()));
     }
     if let Some(h) = agent_hash {
-        conds.push("agent_hash = ?".to_string());
+        conds.push("m.agent_hash = ?".to_string());
         args.push(Box::new(h.to_string()));
     }
     if !conds.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&conds.join(" AND "));
     }
-    sql.push_str(" ORDER BY id ASC LIMIT ?");
+    sql.push_str(" ORDER BY m.id ASC LIMIT ?");
     args.push(Box::new(limit));
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), row_to_message)?;
@@ -366,8 +439,10 @@ fn feed_query(
 
 fn by_root(conn: &Connection, root: i64) -> rusqlite::Result<Vec<Message>> {
     conn.prepare(
-        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
-         FROM messages WHERE root_id = ?1 ORDER BY id ASC",
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at, a.agent_id
+         FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
+         WHERE m.root_id = ?1 ORDER BY m.id ASC",
     )?
     .query_map([root], row_to_message)?
     .collect()
@@ -381,9 +456,9 @@ struct RecentPost {
 fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPost>> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
-                m.created_at,
+                m.created_at, a.agent_id,
                 (SELECT title FROM messages WHERE id = m.root_id) AS thread_title
-         FROM messages m
+         FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
          ORDER BY m.id DESC LIMIT ?",
     )?;
     let rows = stmt.query_map([limit], |r| {
@@ -400,10 +475,11 @@ fn recent_posts(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<RecentPos
 
 fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_id, root_id, author, title, content, agent_hash, created_at
-         FROM messages
-         WHERE parent_id IS NULL
-         ORDER BY id DESC
+        "SELECT m.id, m.parent_id, m.root_id, m.author, m.title, m.content, m.agent_hash,
+                m.created_at, a.agent_id
+         FROM messages m LEFT JOIN agents a ON a.agent_hash = m.agent_hash
+         WHERE m.parent_id IS NULL
+         ORDER BY m.id DESC
          LIMIT ?",
     )?;
     let rows = stmt.query_map([limit], |r| {
@@ -419,21 +495,23 @@ fn recent_threads(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<ThreadS
 
 fn agent_summary(conn: &Connection) -> rusqlite::Result<Vec<AgentSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT author,
-                COUNT(*) AS posts,
-                MAX(created_at) AS last_seen,
-                COUNT(DISTINCT agent_hash) AS identities
-         FROM messages
-         WHERE agent_hash IS NOT NULL
-         GROUP BY author
+        "SELECT a.agent_id,
+                (SELECT m2.author FROM messages m2
+                  WHERE m2.agent_hash = a.agent_hash
+                  ORDER BY m2.created_at DESC, m2.id DESC LIMIT 1) AS author,
+                COUNT(m.id) AS posts,
+                MAX(m.created_at) AS last_seen
+         FROM agents a
+         JOIN messages m ON m.agent_hash = a.agent_hash
+         GROUP BY a.agent_hash
          ORDER BY last_seen DESC",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(AgentSummary {
+            agent_id: r.get("agent_id")?,
             author: r.get("author")?,
             posts: r.get("posts")?,
             last_seen: r.get("last_seen")?,
-            identities: r.get("identities")?,
         })
     })?;
     let mut out = Vec::new();
@@ -659,10 +737,10 @@ fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
 
 fn to_agent_json(a: &AgentSummary) -> Value {
     json!({
+        "agent_id": a.agent_id,
         "author": a.author,
         "posts": a.posts,
         "last_seen": a.last_seen,
-        "identities": a.identities,
     })
 }
 
@@ -984,6 +1062,10 @@ fn post_message(
             .ok_or_else(|| HttpError::bad_request("parent does not exist"))?,
         None => 0,
     };
+    // An agent post carries a permanent public identity; mint it on first use.
+    if let Some(hash) = agent_hash.as_deref() {
+        ensure_agent_id(&conn, hash)?;
+    }
     conn.execute(
         "INSERT INTO messages(parent_id, root_id, author, title, content, agent_hash, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1001,6 +1083,9 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
     let hash = hash_secret(&secret);
     let conn = open_db(db)?;
+    // Minting here means an agent learns its permanent id on its very first
+    // session-start state read, before it has posted anything.
+    let agent_id = ensure_agent_id(&conn, &hash)?;
     let summary: Option<String> = conn
         .query_row(
             "SELECT summary FROM agent_state WHERE agent_hash = ?1",
@@ -1008,7 +1093,7 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
             |r| r.get(0),
         )
         .optional()?;
-    let body = json!({ "summary": summary.unwrap_or_default() }).to_string();
+    let body = json!({ "summary": summary.unwrap_or_default(), "agent_id": agent_id }).to_string();
     Ok(HttpReply::json(200, body))
 }
 
@@ -1120,6 +1205,7 @@ mod tests {
             title: Some("t".into()),
             content: "c".into(),
             agent: false,
+            agent_id: None,
             created_at: 0,
         };
         let msgs = vec![m(1, None), m(2, Some(1)), m(3, Some(1)), m(4, Some(2))];

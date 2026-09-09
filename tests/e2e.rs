@@ -762,18 +762,67 @@ fn agents_listing_and_home() {
     assert_eq!(resp.status, 200);
     let body = body_json(&resp);
     let agents = body["agents"].as_array().unwrap();
-    assert_eq!(agents.len(), 2);
+    // Two secrets used the same name "alpha-1a2b" -> two identities;
+    // beta-3c4d -> one; carl (no id) is excluded.
+    assert_eq!(agents.len(), 3);
     assert!(!resp.body.contains(SECRET_G));
     assert!(!resp.body.contains(SECRET_I));
 
-    let alpha = agents.iter().find(|x| x["author"] == "alpha-1a2b").unwrap();
-    assert_eq!(alpha["posts"], 2);
-    assert_eq!(alpha["identities"], 2);
+    let alphas: Vec<_> = agents
+        .iter()
+        .filter(|x| x["author"] == "alpha-1a2b")
+        .collect();
+    assert_eq!(alphas.len(), 2);
+    for alpha in &alphas {
+        assert_eq!(alpha["posts"], 1);
+        let id = alpha["agent_id"].as_str().unwrap();
+        assert_eq!(id.len(), 12);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(alpha["identities"].is_null());
+    }
+    assert_ne!(alphas[0]["agent_id"], alphas[1]["agent_id"]);
 
     let beta = agents.iter().find(|x| x["author"] == "beta-3c4d").unwrap();
     assert_eq!(beta["posts"], 1);
-    assert_eq!(beta["identities"], 1);
     assert!(beta["last_seen"].is_i64());
+}
+
+#[test]
+fn agent_id_is_permanent_and_stable() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"author":"n1","content":"one"}"#, Some(SECRET_A));
+    post_json(&a, r#"{"author":"n2","content":"two"}"#, Some(SECRET_A));
+    post_json(&a, r#"{"author":"m1","content":"mine"}"#, Some(SECRET_B));
+    post_json(&a, r#"{"author":"human","content":"hi"}"#, None);
+
+    let feed = http(&a, "GET", "/api/messages", &[], None);
+    assert_eq!(feed.status, 200);
+    let msgs = msgs(&feed);
+    let one = msgs.iter().find(|m| m["author"] == "n1").unwrap();
+    let two = msgs.iter().find(|m| m["author"] == "n2").unwrap();
+    let mine = msgs.iter().find(|m| m["author"] == "m1").unwrap();
+    let human = msgs.iter().find(|m| m["author"] == "human").unwrap();
+
+    let id_a = one["agent_id"].as_str().unwrap();
+    let id_b = mine["agent_id"].as_str().unwrap();
+    assert_eq!(id_a.len(), 12);
+    assert_eq!(id_b.len(), 12);
+    assert!(id_a.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_ne!(id_a, id_b);
+    // Same secret, different names -> same permanent id.
+    assert_eq!(two["agent_id"].as_str().unwrap(), id_a);
+    // Human posts carry no agent id.
+    assert!(human["agent_id"].is_null());
+
+    // /api/state reveals the caller's own id.
+    let st = http(&a, "GET", "/api/state", &[("X-Agent-ID", SECRET_A)], None);
+    assert_eq!(body_json(&st)["agent_id"].as_str().unwrap(), id_a);
+
+    // The agent listing agrees.
+    let body = body_json(&http(&a, "GET", "/api/agents", &[], None));
+    let arr = body["agents"].as_array().unwrap();
+    assert!(arr.iter().any(|x| x["agent_id"].as_str() == Some(id_a)));
 }
 
 #[test]
