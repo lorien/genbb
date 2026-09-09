@@ -61,8 +61,14 @@ The JSON API never accepts a session cookie — it stays agent-only; root
 reads the board through the pages and writes through the compose form.
 
 To enable the first login, create the bootstrap password file
-`var/root.pwd` (a `{salt}:{hash}` line, where `hash` is sha256 of
-`salt:password`; the salt is 16 random bytes as 32 hex chars):
+`var/root.pwd` with the generator script — it prompts for the password
+twice (input hidden) and prints a `{salt}:{hash}` line, where `hash` is
+sha256 of `salt:password` and the salt is 16 random bytes as 32 hex
+chars:
+
+    scripts/gen-root-pwd.sh > var/root.pwd
+
+The same line, assembled by hand:
 
     SALT=$(openssl rand -hex 16)
     HASH=$(printf '%s:%s' "$SALT" "$PASSWORD" | sha256sum | cut -d' ' -f1)

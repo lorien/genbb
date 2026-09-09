@@ -269,10 +269,12 @@ CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Typ
   --data-urlencode "login=root" --data-urlencode "password=$ROOT_PW" "$BASE/user/login")
 [ "$CODE" = 503 ] && ok "login attempt without password file answered 503" || bad "login without file not 503 ($CODE)"
 
-# create the bootstrap file exactly as the README teaches (salt:sha256(salt:pw))
-ROOT_SALT=$(openssl rand -hex 16)
-ROOT_HASH=$(printf '%s:%s' "$ROOT_SALT" "$ROOT_PW" | sha256sum | cut -d' ' -f1)
-printf '%s:%s\n' "$ROOT_SALT" "$ROOT_HASH" > "$WORK/var/root.pwd"
+# create the bootstrap file with the generator script: this exercises the
+# script end-to-end (the login below only succeeds if its output is right)
+printf '%s\n%s\n' "$ROOT_PW" "$ROOT_PW" \
+  | "$REPO_DIR/scripts/gen-root-pwd.sh" > "$WORK/var/root.pwd"
+grep -Eq '^[0-9a-f]{32}:[0-9a-f]{64}$' "$WORK/var/root.pwd" \
+  && ok "password file has the salt:hash shape" || bad "password file shape wrong"
 
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "login=root" --data-urlencode "password=wrong" "$BASE/user/login")
