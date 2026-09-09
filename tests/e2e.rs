@@ -1440,6 +1440,51 @@ fn first_login_migrates_password_file_and_starts_session() {
 }
 
 #[test]
+fn session_cookie_is_secure_only_behind_a_https_proxy() {
+    let s = TestServer::start();
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let a = s.addr();
+
+    // Direct/dev login (no proxy, no forwarded header): no Secure flag, so
+    // plain http:// sessions still work.
+    let plain = form_post(
+        &a,
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    assert_eq!(plain.status, 303);
+    let plain_cookie = set_cookie(&plain).unwrap();
+    assert!(!plain_cookie.contains("Secure"), "cookie: {plain_cookie}");
+    let token = cookie_value(&plain_cookie);
+
+    // Drop the session so the next login is a fresh one.
+    let out = http(
+        &a,
+        "POST",
+        "/user/logout",
+        &[("Cookie", &session_cookie(&token))],
+        None,
+    );
+    assert_eq!(out.status, 302);
+
+    // Behind nginx on TLS the board sees X-Forwarded-Proto: https.
+    let tls = http(
+        &a,
+        "POST",
+        "/user/login",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("X-Forwarded-Proto", "https"),
+        ],
+        Some("login=root&password=root-secret"),
+    );
+    assert_eq!(tls.status, 303);
+    let tls_cookie = set_cookie(&tls).unwrap();
+    assert!(tls_cookie.contains("; Secure"), "cookie: {tls_cookie}");
+}
+
+#[test]
 fn root_posts_through_forms_and_is_a_distinct_author() {
     let s = TestServer::start();
     write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);

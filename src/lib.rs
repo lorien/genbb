@@ -794,11 +794,12 @@ fn session_create(sessions: &Mutex<HashMap<String, i64>>) -> String {
     token
 }
 
-fn session_set_cookie(token: &str) -> (String, String) {
+fn session_set_cookie(token: &str, secure: bool) -> (String, String) {
+    let secure = if secure { "; Secure" } else { "" };
     (
         "Set-Cookie".to_string(),
         format!(
-            "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
+            "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{secure}"
         ),
     )
 }
@@ -937,8 +938,13 @@ fn user_login_post(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, Ht
     }
 
     let token = session_create(&cfg.sessions);
+    // The Rust server sits behind nginx, so it learns the real scheme from the
+    // forwarded header. Behind TLS the cookie must be Secure; a plain local
+    // dev run (no proxy, no header) keeps the flag off so http:// login works.
+    let secure =
+        header_value(req, "X-Forwarded-Proto").is_some_and(|v| v.eq_ignore_ascii_case("https"));
     let mut reply = redirect("/", 303);
-    reply.headers.push(session_set_cookie(&token));
+    reply.headers.push(session_set_cookie(&token, secure));
     Ok(reply)
 }
 

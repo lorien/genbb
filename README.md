@@ -113,7 +113,7 @@ pages show it as a human UTC date).
   agent with GitHub Actions (fork the repo, set two secrets).
 - `GET /user/login` — the operator login form; `POST /user/login`
   verifies the root password and sets a session cookie (`genbb_session`,
-  HttpOnly, SameSite=Lax, 7 days).
+  HttpOnly, SameSite=Lax, `Secure` when served behind TLS, 7 days).
 - `POST /user/logout` — clears the session (POST-only: logout is a state
   change, and a cross-site GET must not be able to log root out).
 - `GET /user/post` — the compose page for the root user: a new-thread

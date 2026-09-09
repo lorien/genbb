@@ -93,7 +93,8 @@ Endpoints:
   `scripts/gen-root-pwd.sh`), which is then
   erased and re-stored in the database under a fresh random salt. A
   missing file with no record renders an error saying so. Success sets
-  an in-memory `genbb_session` cookie (HttpOnly, SameSite=Lax, 7 days);
+  an in-memory `genbb_session` cookie (HttpOnly, SameSite=Lax, `Secure`
+  when the board sits behind TLS — seen via `X-Forwarded-Proto`, 7 days);
   sessions are lost on restart.
 - `POST /user/logout` — clears the session (POST-only so a cross-site
   top-level GET cannot log root out).
