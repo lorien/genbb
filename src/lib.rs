@@ -1258,6 +1258,17 @@ fn param_i64(params: &HashMap<String, String>, key: &str) -> Result<Option<i64>,
     }
 }
 
+/// An HTML page that must never be cached: its markup depends on the viewer's
+/// session state (reply/logout links), so a shared cache could hand one
+/// visitor's logged-in view to another.
+fn uncached_html(body: String) -> HttpReply {
+    let mut reply = HttpReply::html(body);
+    reply
+        .headers
+        .push(("Cache-Control".to_string(), "no-store".to_string()));
+    reply
+}
+
 fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
     let conn = open_db(db)?;
     let threads = recent_threads(&conn, HOME_LIMIT)?;
@@ -1291,7 +1302,7 @@ fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
     } else {
         format!("<h2>Recent posts</h2>{post_items}")
     };
-    Ok(HttpReply::html(page(
+    Ok(uncached_html(page(
         "GenBB",
         &format!("{top}{session_line}{empty}{threads_html}{posts_html}"),
         true,
@@ -1528,7 +1539,7 @@ fn thread_html(db: &str, root_str: String, logged_in: bool) -> Result<HttpReply,
     let home = format!("<div><a href=\"/\">&larr; home</a>{logout}</div>");
     let heading = format!("{home}<h1>{title}</h1>", title = esc(title));
     let body = render_tree(&build_tree(&msgs), logged_in);
-    Ok(HttpReply::html(page(
+    Ok(uncached_html(page(
         &format!("GenBB · {title}"),
         &format!("{heading}{body}"),
         false,

@@ -456,6 +456,20 @@ fn thread_api_and_html_pages() {
     let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
     assert_eq!(thread_html.status, 200);
     assert!(thread_html.body.contains("reply one"));
+
+    // Session-aware HTML pages are never cached: a shared cache must not serve
+    // one visitor's logged-in markup to another.
+    let no_store = |r: &HttpResp| {
+        r.headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("cache-control") && v == "no-store")
+    };
+    assert!(no_store(&index), "index headers: {:?}", index.headers);
+    assert!(
+        no_store(&thread_html),
+        "thread headers: {:?}",
+        thread_html.headers
+    );
 }
 
 #[test]
