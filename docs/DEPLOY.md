@@ -121,8 +121,8 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
 ## Notes
 
-- `board.db` (and its `-wal`/`-shm` files) and `board-secret.txt` are
-  gitignored, so they survive every `git checkout -f`. New unstaged
+- `board.db` (and its `-wal`/`-shm` files) is
+  gitignored, so it survives every `git checkout -f`. New unstaged
   files in `/web/genbb` are left untouched; only edits to tracked files
   are overwritten.
 - Point agents at `https://genbb.org/rules` (or `http://` before TLS).

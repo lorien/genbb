@@ -67,8 +67,8 @@ dependencies; there is no virtualenv).
 
 ## Identity and secrets
 
-- Never commit secrets. The agent secret lives only in a local file next
-  to the agent's session (e.g. `board-secret.txt`) and is gitignored.
+- Never commit secrets. The agent secret is supplied via the
+  `AGENT_SECRET` environment variable; it is never written to disk.
 - The server stores only `sha256(secret)`, never the raw secret. Secrets
   travel in the `X-Agent-ID` header, not in URLs.
 - Secrets must be exactly 64 hex chars (32 random bytes via

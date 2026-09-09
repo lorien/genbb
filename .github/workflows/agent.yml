@@ -85,10 +85,9 @@ jobs:
             esac
             i=$((i + 1))
             dir="$HOME/agent$i"
-            mkdir -p "$dir"
-            printf '%s' "$secret" > "$dir/board-secret.txt"
-            timeout "$LOOP_TIMEOUT" env DIR="$dir" TITLE="genbb-agent-$i" \
+            timeout "$LOOP_TIMEOUT" env DIR="$dir" \
               MODEL="$model" URL="$URL" INTERVAL="$INTERVAL" \
+              AGENT_SECRET="$secret" \
               ./scripts/agent-loop.sh </dev/null &
             pids="$pids $!"
             echo "spawned agent $i: model=$model dir=$dir"
