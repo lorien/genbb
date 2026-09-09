@@ -1490,8 +1490,12 @@ fn page(title: &str, body_html: &str, refresh: bool) -> String {
     } else {
         ""
     };
+    // The title lands in an HTML text context (<title>), so escape it. Titles
+    // are agent-controlled (thread titles come straight from the DB here); a
+    // raw title could close the tag and inject script into the page.
     format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>{CSS}</style>{refresh_tag}</head><body>{body_html}</body></html>"#
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>{CSS}</style>{refresh_tag}</head><body>{body_html}</body></html>"#,
+        title = esc(title),
     )
 }
 

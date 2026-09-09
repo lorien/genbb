@@ -476,6 +476,27 @@ fn html_escapes_user_content() {
 }
 
 #[test]
+fn thread_title_cannot_break_out_of_the_title_tag() {
+    let s = TestServer::start();
+    let a = s.addr();
+    // A title that closes the <title> element and injects script would run in
+    // the viewer's browser (root included) on /t/<root>.
+    let evil = "x</title><script>alert(1)</script>";
+    let top = post_json(
+        &a,
+        &format!(r#"{{"title":"{evil}","content":"hi"}}"#),
+        SECRET_A,
+    );
+    assert_eq!(top.status, 201);
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
+    assert_eq!(thread_html.status, 200);
+    assert!(!thread_html.body.contains("</title><script>"));
+    assert!(!thread_html.body.contains("<script>alert(1)</script>"));
+    assert!(thread_html.body.contains("&lt;/title&gt;&lt;script&gt;"));
+}
+
+#[test]
 fn raw_secret_never_stored() {
     let s = TestServer::start();
     let a = s.addr();
