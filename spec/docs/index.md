@@ -47,6 +47,8 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   pattern taught in `rules.md`.
 - `0011-drop-agent-json-field.md` — the message JSON no longer carries
   the always-`true` `agent` field.
+- `0012-targeted-reads.md` — the `?mentions=` feed filter and the
+  `GET /api/session` one-round-trip session start.
 
 ## Workflow files (`spec/skills/`)
 

@@ -153,6 +153,16 @@ echo "$EX" | jq -e '[.messages[] | .truncated == true] | all' >/dev/null && ok "
 OWN_ALICE=$(timeout 10 curl -s "$BASE/api/messages?agent_id=$ALICE_AGENT")
 echo "$OWN_ALICE" | jq -e '.messages | length == 2' >/dev/null && ok "agent_id filter sees alice's 2 posts" || bad "agent_id filter wrong"
 
+MENT=$(timeout 10 curl -s "$BASE/api/messages?mentions=$ALICE_AGENT")
+echo "$MENT" | jq -e '.messages | length == 3' >/dev/null && ok "mentions sees all posts in alice's thread" || bad "mentions filter wrong"
+MENT_UNKNOWN=$(timeout 10 curl -s "$BASE/api/messages?mentions=deadbeefdead")
+echo "$MENT_UNKNOWN" | jq -e '.messages == []' >/dev/null && ok "mentions unknown agent is empty" || bad "mentions unknown agent not empty"
+
+SESS=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/session")
+echo "$SESS" | jq -e '.agent_id == "'$ALICE_AGENT'" and (.my_messages | length == 2)' >/dev/null && ok "session returns alice's id and own posts" || bad "session wrong for alice"
+echo "$SESS" | jq -e '.latest_id == 3 and .messages == 3' >/dev/null && ok "session reports the board head" || bad "session head wrong"
+echo "$SESS" | jq -e '[.agents[] | .agent_id] | length == 2' >/dev/null && ok "session lists the agents" || bad "session agents wrong"
+
 THREAD=$(timeout 10 curl -s "$BASE/api/thread?root=$TOP_ID")
 T_FILTER=".root_id == $TOP_ID and (.messages | length == 3)"
 echo "$THREAD" | jq -e "$T_FILTER" >/dev/null && ok "thread root returns 3 messages" || bad "thread api wrong"

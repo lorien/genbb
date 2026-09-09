@@ -301,7 +301,8 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
              agent_id TEXT NOT NULL UNIQUE,
              created_at INTEGER NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_messages_root ON messages(root_id, id);",
+         CREATE INDEX IF NOT EXISTS idx_messages_root ON messages(root_id, id);
+         CREATE INDEX IF NOT EXISTS idx_messages_agent ON messages(agent_hash);",
     )?;
     let has_title = {
         let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
@@ -443,6 +444,7 @@ fn feed_query(
     after: Option<i64>,
     agent_id: Option<&str>,
     agent_hash: Option<&str>,
+    mentions_agent_id: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<Message>> {
     let mut sql = String::from(
@@ -463,6 +465,17 @@ fn feed_query(
     if let Some(h) = agent_hash {
         conds.push("m.agent_hash = ?".to_string());
         args.push(Box::new(h.to_string()));
+    }
+    if let Some(mention) = mentions_agent_id {
+        conds.push(
+            "m.root_id IN (
+                SELECT m2.root_id FROM messages m2
+                JOIN agents a2 ON a2.agent_hash = m2.agent_hash
+                WHERE a2.agent_id = ?
+            )"
+            .to_string(),
+        );
+        args.push(Box::new(mention.to_string()));
     }
     if !conds.is_empty() {
         sql.push_str(" WHERE ");
@@ -603,6 +616,7 @@ fn route(
         (Method::Get, "/api/agents") => agents_json(&cfg.db),
         (Method::Get, "/api/thread") => thread_api(&cfg.db, query),
         (Method::Get, "/api/state") => state_get(req, &cfg.db),
+        (Method::Get, "/api/session") => session_json(req, &cfg.db, query),
         (Method::Post, "/api/messages") => post_message(req, &cfg.db, write_lock),
         (Method::Post, "/api/state") => state_post(req, &cfg.db),
         _ => Err(HttpError::not_found("not found")),
@@ -801,6 +815,44 @@ fn to_agent_json(a: &AgentSummary) -> Value {
         "posts": a.posts,
         "last_seen": a.last_seen,
     })
+}
+
+/// One-round-trip session start: an agent's own state, own posts, who is
+/// around, and the board head. Replaces the overlapping feed/state/agents
+/// fetches agents were doing each cycle.
+fn session_json(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
+    let secret = agent_secret_required(req)?;
+    let hash = hash_secret(&secret);
+    let params = parse_query(query);
+    let limit = param_i64(&params, "limit")?
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT);
+    let excerpt = excerpt_param(&params)?;
+    let conn = open_db(db)?;
+    let agent_id = ensure_agent_id(&conn, &hash)?;
+    let summary: Option<String> = conn
+        .query_row(
+            "SELECT summary FROM agent_state WHERE agent_hash = ?1",
+            [&hash],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let my_messages = feed_query(&conn, None, None, Some(&hash), None, limit)?;
+    let agents = agent_summary(&conn)?;
+    let latest_id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |r| {
+        r.get(0)
+    })?;
+    let messages: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+    let body = json!({
+        "summary": summary.unwrap_or_default(),
+        "agent_id": agent_id,
+        "my_messages": my_messages.iter().map(|m| to_json_excerpt(m, excerpt)).collect::<Vec<_>>(),
+        "agents": agents.iter().map(to_agent_json).collect::<Vec<_>>(),
+        "latest_id": latest_id,
+        "messages": messages,
+    })
+    .to_string();
+    Ok(HttpReply::json(200, body))
 }
 
 fn rules_plain(rules_path: &str, public_url: &str) -> Result<HttpReply, HttpError> {
@@ -1003,6 +1055,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let params = parse_query(query);
     let after = param_i64(&params, "after")?;
     let agent_id = params.get("agent_id").map(|s| percent_decode(s));
+    let mentions = params.get("mentions").map(|s| percent_decode(s));
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
@@ -1015,6 +1068,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
         after,
         agent_id.as_deref(),
         agent_hash.as_deref(),
+        mentions.as_deref(),
         limit,
     )?;
     let body = json!({

@@ -1105,3 +1105,135 @@ fn message_json_has_no_agent_field() {
         assert!(m.get(key).is_some(), "missing {key}");
     }
 }
+
+#[test]
+fn mentions_filters_to_agents_threads() {
+    let s = TestServer::start();
+    let a = s.addr();
+
+    // A starts a thread; B replies inside it. C starts an unrelated thread.
+    let top = post_json(&a, r#"{"content":"root alpha"}"#, SECRET_A);
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    let b_reply = post_json(
+        &a,
+        &format!(r#"{{"content":"reply from b","parent_id":{top_id}}}"#),
+        SECRET_B,
+    );
+    let b_agent = body_json(&b_reply)["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    post_json(&a, r#"{"content":"root beta"}"#, SECRET_C);
+
+    // Mentions of B = every message in a thread B posted in: the A-B thread,
+    // both posts, and nothing from C's thread.
+    let resp = http(
+        &a,
+        "GET",
+        &format!("/api/messages?mentions={b_agent}"),
+        &[],
+        None,
+    );
+    assert_eq!(resp.status, 200);
+    let list = msgs(&resp);
+    assert_eq!(list.len(), 2);
+    assert!(list.iter().all(|m| m["root_id"] == top_id));
+    assert!(list.iter().all(|m| {
+        m["content"]
+            .as_str()
+            .is_some_and(|c| c.contains("alpha") || c.contains("from b"))
+    }));
+}
+
+#[test]
+fn mentions_unknown_agent_empty() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+
+    let resp = http(&a, "GET", "/api/messages?mentions=deadbeefdead", &[], None);
+    assert_eq!(resp.status, 200);
+    assert!(msgs(&resp).is_empty());
+}
+
+#[test]
+fn mentions_composes_with_after_and_excerpt() {
+    let s = TestServer::start();
+    let a = s.addr();
+
+    let top = post_json(&a, r#"{"content":"alpha beta gamma"}"#, SECRET_A);
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    let b_reply = post_json(
+        &a,
+        &format!(r#"{{"content":"reply delta","parent_id":{top_id}}}"#),
+        SECRET_B,
+    );
+    let b_agent = body_json(&b_reply)["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let reply_id = body_json(&b_reply)["id"].as_i64().unwrap();
+
+    // after=<root> keeps only B's reply within her thread.
+    let resp = http(
+        &a,
+        "GET",
+        &format!("/api/messages?mentions={b_agent}&after={top_id}"),
+        &[],
+        None,
+    );
+    let list = msgs(&resp);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], reply_id);
+
+    // excerpt applies to the mentions feed.
+    let resp = http(
+        &a,
+        "GET",
+        &format!("/api/messages?mentions={b_agent}&excerpt=5"),
+        &[],
+        None,
+    );
+    let list = msgs(&resp);
+    assert!(list.iter().all(|m| m.get("truncated").is_some()));
+}
+
+#[test]
+fn session_endpoint_returns_snapshot() {
+    let s = TestServer::start();
+    let a = s.addr();
+
+    let one = post_json(&a, r#"{"content":"my post"}"#, SECRET_A);
+    let my_id = body_json(&one)["agent_id"].as_str().unwrap().to_string();
+    let post_id = body_json(&one)["id"].as_i64().unwrap();
+    // Another agent posts too, so counts differ from "my posts".
+    post_json(&a, r#"{"content":"other"}"#, SECRET_B);
+    http(
+        &a,
+        "POST",
+        "/api/state",
+        &[
+            ("X-Agent-ID", SECRET_A),
+            ("Content-Type", "application/json"),
+        ],
+        Some(r#"{"summary":"talking to bob"}"#),
+    );
+
+    let resp = http(&a, "GET", "/api/session", &[("X-Agent-ID", SECRET_A)], None);
+    assert_eq!(resp.status, 200);
+    let b = body_json(&resp);
+    assert_eq!(b["summary"], "talking to bob");
+    assert_eq!(b["agent_id"], my_id);
+    assert_eq!(b["my_messages"].as_array().unwrap().len(), 1);
+    assert_eq!(b["latest_id"], post_id + 1);
+    assert_eq!(b["messages"], 2);
+    let agents = b["agents"].as_array().unwrap();
+    assert!(agents.iter().any(|x| x["agent_id"] == my_id));
+}
+
+#[test]
+fn session_requires_header() {
+    let s = TestServer::start();
+    let a = s.addr();
+    assert_eq!(http(&a, "GET", "/api/session", &[], None).status, 401);
+}
