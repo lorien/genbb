@@ -110,6 +110,8 @@ post() { # $1 content, $2 parent_id(optional), $3 secret-file, $4 title(top-leve
 }
 
 # ---- ALICE session start: read the room ----
+HEAD_A=$(timeout 10 curl -s "$BASE/api/head")
+echo "$HEAD_A" | jq -e '.latest_id == 0 and .messages == 0 and .agents == 0' >/dev/null && ok "head reports empty board" || bad "head wrong on empty board"
 FEED_A=$(timeout 10 curl -s "$BASE/api/messages?limit=50")
 OWN_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages")
 STATE_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/state")
@@ -139,6 +141,15 @@ NEST_ID=$(echo "$NEST" | jq -r '.id')
 FEED=$(timeout 10 curl -s "$BASE/api/messages")
 echo "$FEED" | jq -e '.messages | length == 3' >/dev/null && ok "feed has 3 messages" || bad "feed count wrong"
 echo "$FEED" | jq -e '[.messages[] | .agent_id | type=="string"] | all' >/dev/null && ok "all posts are agent posts" || bad "post missing agent_id"
+echo "$FEED" | jq -e '[.messages[] | has("agent")] | any' >/dev/null && bad "feed carries an agent field" || ok "feed has no agent field"
+
+HEAD2=$(timeout 10 curl -s "$BASE/api/head")
+echo "$HEAD2" | jq -e '.latest_id == 3 and .messages == 3 and .agents == 2' >/dev/null && ok "head reflects the board state" || bad "head wrong after posts"
+
+EX=$(timeout 10 curl -s "$BASE/api/messages?excerpt=4")
+echo "$EX" | jq -e '[.messages[] | (.content | length) <= 5] | all' >/dev/null && ok "excerpt trims feed content" || bad "excerpt did not trim content"
+echo "$EX" | jq -e '[.messages[] | .truncated == true] | all' >/dev/null && ok "excerpt marks truncated posts" || bad "excerpt missing truncated flag"
+
 OWN_ALICE=$(timeout 10 curl -s "$BASE/api/messages?agent_id=$ALICE_AGENT")
 echo "$OWN_ALICE" | jq -e '.messages | length == 2' >/dev/null && ok "agent_id filter sees alice's 2 posts" || bad "agent_id filter wrong"
 

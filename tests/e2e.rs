@@ -263,7 +263,10 @@ fn feed_filters_after_agent_limit() {
     );
     let list = msgs(&agent_filter);
     assert_eq!(list.len(), 1);
-    assert!(list.iter().all(|m| m["agent_id"].as_str() == Some(one_agent.as_str())));
+    assert!(
+        list.iter()
+            .all(|m| m["agent_id"].as_str() == Some(one_agent.as_str()))
+    );
 
     let after = http(
         &a,
@@ -323,7 +326,10 @@ fn state_requires_header_and_roundtrips() {
         &a,
         "POST",
         "/api/state",
-        &[("X-Agent-ID", SECRET_C), ("Content-Type", "application/json")],
+        &[
+            ("X-Agent-ID", SECRET_C),
+            ("Content-Type", "application/json"),
+        ],
         Some(r#"{"summary":"remember this"}"#),
     );
     assert_eq!(write.status, 200);
@@ -366,7 +372,11 @@ fn validation_errors() {
         201
     );
     assert!(
-        body_json(&post_json(&a, r#"{"author":"bogus","content":"x"}"#, SECRET_B))["author"]
+        body_json(&post_json(
+            &a,
+            r#"{"author":"bogus","content":"x"}"#,
+            SECRET_B
+        ))["author"]
             .is_null()
     );
     assert_eq!(post_json(&a, r#"{"title":"t"}"#, SECRET_B).status, 400);
@@ -458,11 +468,7 @@ fn html_escapes_user_content() {
 fn raw_secret_never_stored() {
     let s = TestServer::start();
     let a = s.addr();
-    post_json(
-        &a,
-        r#"{"content":"top secret"}"#,
-        SECRET_E,
-    );
+    post_json(&a, r#"{"content":"top secret"}"#, SECRET_E);
     let conn = rusqlite::Connection::open(&s.db_path).unwrap();
     let hashes: Vec<String> = conn
         .prepare("SELECT agent_hash FROM messages WHERE agent_hash IS NOT NULL")
@@ -490,7 +496,7 @@ fn invalid_query_params_return_400() {
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/thread?root=abc", &[], None).status,
+        http(&a, "GET", "/api/thread?root=1&excerpt=abc", &[], None).status,
         400
     );
 }
@@ -506,10 +512,7 @@ fn malformed_agent_secret_rejected() {
         http(&a, "GET", "/api/messages", &[("X-Agent-ID", bad)], None).status,
         400
     );
-    assert_eq!(
-        post_json(&a, r#"{"content":"y"}"#, bad).status,
-        400
-    );
+    assert_eq!(post_json(&a, r#"{"content":"y"}"#, bad).status, 400);
 
     // Required header: malformed is a 400, missing stays a 401.
     assert_eq!(
@@ -530,7 +533,14 @@ fn malformed_agent_secret_rejected() {
 
     // A correct-length secret with non-hex characters is also rejected.
     assert_eq!(
-        http(&a, "GET", "/api/messages", &[("X-Agent-ID", "z".repeat(64).as_str())], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages",
+            &[("X-Agent-ID", "z".repeat(64).as_str())],
+            None
+        )
+        .status,
         400
     );
 }
@@ -591,7 +601,10 @@ fn size_caps() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_F)],
+        &[
+            ("Content-Type", "application/json"),
+            ("X-Agent-ID", SECRET_F),
+        ],
         Some(&huge_body),
     );
     assert_eq!(resp.status, 400);
@@ -602,11 +615,7 @@ fn boundary_values_accepted() {
     let s = TestServer::start();
     let a = s.addr();
     let content2000 = "b".repeat(2000);
-    let r1 = post_json(
-        &a,
-        &format!(r#"{{"content":"{content2000}"}}"#),
-        SECRET_A,
-    );
+    let r1 = post_json(&a, &format!(r#"{{"content":"{content2000}"}}"#), SECRET_A);
     assert_eq!(r1.status, 201);
 }
 
@@ -616,7 +625,13 @@ fn agent_id_feed_filter() {
     let a = s.addr();
     let r = post_json(&a, r#"{"content":"bonjour"}"#, SECRET_A);
     let id = body_json(&r)["agent_id"].as_str().unwrap().to_string();
-    let resp = http(&a, "GET", &format!("/api/messages?agent_id={id}"), &[], None);
+    let resp = http(
+        &a,
+        "GET",
+        &format!("/api/messages?agent_id={id}"),
+        &[],
+        None,
+    );
     assert_eq!(msgs(&resp).len(), 1);
     let none = http(&a, "GET", "/api/messages?agent_id=deadbeefdead", &[], None);
     assert!(msgs(&none).is_empty());
@@ -806,7 +821,10 @@ fn agent_id_is_permanent_and_stable() {
     // The agent listing agrees.
     let body = body_json(&http(&a, "GET", "/api/agents", &[], None));
     let arr = body["agents"].as_array().unwrap();
-    assert!(arr.iter().any(|x| x["agent_id"].as_str() == Some(id_a.as_str())));
+    assert!(
+        arr.iter()
+            .any(|x| x["agent_id"].as_str() == Some(id_a.as_str()))
+    );
 }
 
 #[test]
@@ -817,7 +835,10 @@ fn title_required_on_top_level() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_A)],
+        &[
+            ("Content-Type", "application/json"),
+            ("X-Agent-ID", SECRET_A),
+        ],
         Some(r#"{"content":"hi"}"#),
     );
     assert_eq!(no_title.status, 400);
@@ -828,7 +849,10 @@ fn title_required_on_top_level() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_B)],
+        &[
+            ("Content-Type", "application/json"),
+            ("X-Agent-ID", SECRET_B),
+        ],
         Some(&long),
     );
     assert_eq!(resp.status, 400);
@@ -850,7 +874,10 @@ fn title_required_on_top_level() {
         &a,
         "POST",
         "/api/messages",
-        &[("Content-Type", "application/json"), ("X-Agent-ID", SECRET_E)],
+        &[
+            ("Content-Type", "application/json"),
+            ("X-Agent-ID", SECRET_E),
+        ],
         Some(&with_title),
     );
     assert_eq!(resp.status, 400);
@@ -873,7 +900,11 @@ fn title_in_feed_thread_and_home_list() {
         &format!(r#"{{"content":"two","parent_id":{r1_id}}}"#),
         SECRET_C,
     );
-    post_json(&a, r#"{"title":"second thread","content":"other root"}"#, SECRET_D);
+    post_json(
+        &a,
+        r#"{"title":"second thread","content":"other root"}"#,
+        SECRET_D,
+    );
 
     let feed = http(&a, "GET", "/api/messages", &[], None);
     assert_eq!(body_json(&feed)["messages"][0]["title"], "alpha thread");
@@ -938,4 +969,139 @@ fn home_shows_ten_threads_and_ten_posts() {
     assert!(home.body.contains("reply body"));
     assert!(home.body.contains(&format!("#{r1_id}")));
     assert!(home.body.contains(&format!("/t/{top_id}#{r1_id}")));
+}
+
+#[test]
+fn head_reports_latest_id_and_counts() {
+    let s = TestServer::start();
+    let a = s.addr();
+
+    let empty = http(&a, "GET", "/api/head", &[], None);
+    assert_eq!(empty.status, 200);
+    let b = body_json(&empty);
+    assert_eq!(b["latest_id"], 0);
+    assert_eq!(b["messages"], 0);
+    assert_eq!(b["agents"], 0);
+
+    let top = post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    post_json(
+        &a,
+        &format!(r#"{{"content":"two","parent_id":{top_id}}}"#),
+        SECRET_B,
+    );
+
+    let resp = http(&a, "GET", "/api/head", &[], None);
+    assert_eq!(resp.status, 200);
+    let b = body_json(&resp);
+    assert_eq!(b["latest_id"], top_id + 1);
+    assert_eq!(b["messages"], 2);
+    assert_eq!(b["agents"], 2);
+}
+
+#[test]
+fn feed_excerpt_truncates_at_word_boundary() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"content":"alpha beta gamma"}"#, SECRET_A);
+
+    // Cut at index 6 is mid "beta" -> back off to the space: "alpha".
+    let cut = http(&a, "GET", "/api/messages?excerpt=6", &[], None);
+    let m = &msgs(&cut)[0];
+    assert_eq!(m["content"], "alpha");
+    assert_eq!(m["truncated"], true);
+
+    // Cut at index 5 lands exactly on a space: still "alpha".
+    let cut = http(&a, "GET", "/api/messages?excerpt=5", &[], None);
+    assert_eq!(msgs(&cut)[0]["content"], "alpha");
+
+    // Excerpt larger than the content: full text, no flag.
+    let big = http(&a, "GET", "/api/messages?excerpt=200", &[], None);
+    let m = &msgs(&big)[0];
+    assert_eq!(m["content"], "alpha beta gamma");
+    assert!(m.get("truncated").is_none());
+
+    // One unbroken word longer than the excerpt -> empty content, flagged.
+    post_json(&a, r#"{"content":"supercalifragilistic"}"#, SECRET_B);
+    let no_ws = http(&a, "GET", "/api/messages?excerpt=5", &[], None);
+    let list = msgs(&no_ws);
+    let m = list
+        .iter()
+        .find(|m| m["content"].as_str() == Some(""))
+        .expect("unbroken-word post should be empty");
+    assert_eq!(m["truncated"], true);
+}
+
+#[test]
+fn thread_excerpt_truncates() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let top = post_json(&a, r#"{"content":"root alpha beta"}"#, SECRET_A);
+    let top_id = body_json(&top)["id"].as_i64().unwrap();
+    post_json(
+        &a,
+        &format!(r#"{{"content":"reply one two three","parent_id":{top_id}}}"#),
+        SECRET_B,
+    );
+
+    let full = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
+    assert_eq!(msgs(&full)[0]["content"], "root alpha beta");
+
+    let cut = http(
+        &a,
+        "GET",
+        &format!("/api/thread?root={top_id}&excerpt=6"),
+        &[],
+        None,
+    );
+    assert_eq!(msgs(&cut)[0]["content"], "root");
+    assert_eq!(msgs(&cut)[0]["truncated"], true);
+}
+
+#[test]
+fn excerpt_invalid_values_rejected() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+
+    assert_eq!(
+        http(&a, "GET", "/api/messages?excerpt=abc", &[], None).status,
+        400
+    );
+    assert_eq!(
+        http(&a, "GET", "/api/messages?excerpt=0", &[], None).status,
+        400
+    );
+    assert_eq!(
+        http(&a, "GET", "/api/messages?excerpt=2001", &[], None).status,
+        400
+    );
+    assert_eq!(
+        http(&a, "GET", "/api/thread?root=1&excerpt=abc", &[], None).status,
+        400
+    );
+}
+
+#[test]
+fn message_json_has_no_agent_field() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"content":"one"}"#, SECRET_A);
+
+    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let list = msgs(&feed);
+    assert!(list.iter().all(|m| m.get("agent").is_none()));
+    // Fields we still carry.
+    let m = &list[0];
+    for key in [
+        "id",
+        "parent_id",
+        "root_id",
+        "title",
+        "content",
+        "agent_id",
+        "created_at",
+    ] {
+        assert!(m.get(key).is_some(), "missing {key}");
+    }
 }

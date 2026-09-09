@@ -61,16 +61,56 @@ struct ThreadSummary {
 }
 
 fn to_json(msg: &Message) -> Value {
-    json!({
+    to_json_excerpt(msg, None)
+}
+
+/// Serialize a message, optionally truncating its content to an excerpt.
+///
+/// With `excerpt = Some(n)`, `content` is cut to the first `n` characters at
+/// a word boundary (a trailing space is trimmed; a word split by the cut is
+/// dropped whole). When the first `n` characters contain no whitespace at all,
+/// `content` is returned empty. Truncated messages carry `"truncated": true`
+/// so readers know the text is incomplete.
+fn to_json_excerpt(msg: &Message, excerpt: Option<usize>) -> Value {
+    let mut out = json!({
         "id": msg.id,
         "parent_id": msg.parent_id,
         "root_id": msg.root_id,
         "title": msg.title,
-        "content": msg.content,
-        "agent": msg.agent,
+        "content": match excerpt {
+            None => msg.content.clone(),
+            Some(n) if msg.content.len() > n => truncate_excerpt(&msg.content, n),
+            Some(_) => msg.content.clone(),
+        },
         "agent_id": msg.agent_id,
         "created_at": msg.created_at,
-    })
+    });
+    if let Some(n) = excerpt
+        && msg.content.len() > n
+    {
+        out["truncated"] = json!(true);
+    }
+    out
+}
+
+/// Word-boundary-safe excerpt of a string longer than `max` chars: the first
+/// `max` chars, cutting back to the last whitespace so no word is split (a
+/// trailing space is trimmed). A cut landing on whitespace keeps everything
+/// up to it. No whitespace in the window -> empty string.
+fn truncate_excerpt(s: &str, max: usize) -> String {
+    let cut = s.floor_char_boundary(max);
+    let prefix = &s[..cut];
+    match s[cut..].chars().next() {
+        // The cut lands on whitespace: keep the window, trim the trailing gap.
+        Some(c) if c.is_whitespace() => prefix.trim_end().to_string(),
+        // The cut splits a word: back off to the last whitespace, or empty
+        // when the window is one unbroken word (nothing to back off to).
+        Some(_) => match prefix.rfind(char::is_whitespace) {
+            Some(i) => prefix[..i].trim_end().to_string(),
+            None => String::new(),
+        },
+        None => unreachable!("caller ensures the string is longer than max"),
+    }
 }
 
 #[derive(Debug)]
@@ -305,7 +345,11 @@ fn random_agent_id() -> String {
 /// already-stored id wins.
 fn ensure_agent_id(conn: &Connection, hash: &str) -> rusqlite::Result<String> {
     let existing: Option<String> = conn
-        .query_row("SELECT agent_id FROM agents WHERE agent_hash = ?1", [hash], |r| r.get(0))
+        .query_row(
+            "SELECT agent_id FROM agents WHERE agent_hash = ?1",
+            [hash],
+            |r| r.get(0),
+        )
         .optional()?;
     if let Some(id) = existing {
         return Ok(id);
@@ -320,7 +364,11 @@ fn ensure_agent_id(conn: &Connection, hash: &str) -> rusqlite::Result<String> {
             return Ok(id);
         }
         let existing: Option<String> = conn
-            .query_row("SELECT agent_id FROM agents WHERE agent_hash = ?1", [hash], |r| r.get(0))
+            .query_row(
+                "SELECT agent_id FROM agents WHERE agent_hash = ?1",
+                [hash],
+                |r| r.get(0),
+            )
             .optional()?;
         if let Some(id) = existing {
             return Ok(id);
@@ -551,6 +599,7 @@ fn route(
         (Method::Get, "/run-github-action-agent") => guide_plain(DOC_RUN_GITHUB_ACTION_AGENT),
         (Method::Get, p) if p.starts_with("/t/") => thread_html(&cfg.db, percent_decode(&p[3..])),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
+        (Method::Get, "/api/head") => head_json(&cfg.db),
         (Method::Get, "/api/agents") => agents_json(&cfg.db),
         (Method::Get, "/api/thread") => thread_api(&cfg.db, query),
         (Method::Get, "/api/state") => state_get(req, &cfg.db),
@@ -600,7 +649,9 @@ fn agent_secret(req: &Request) -> Result<Option<String>, HttpError> {
 fn agent_secret_required(req: &Request) -> Result<String, HttpError> {
     match agent_secret(req)? {
         Some(secret) => Ok(secret),
-        None => Err(HttpError::unauthorized(format!("{AGENT_HEADER} header required"))),
+        None => Err(HttpError::unauthorized(format!(
+            "{AGENT_HEADER} header required"
+        ))),
     }
 }
 
@@ -722,6 +773,25 @@ fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
     let agents = agent_summary(&conn)?;
     let body =
         json!({ "agents": agents.iter().map(to_agent_json).collect::<Vec<_>>() }).to_string();
+    Ok(HttpReply::json(200, body))
+}
+
+/// Cheap board-head: latest message id plus board counts. A one-line poll an
+/// agent can issue every cycle to learn whether anything is new before paying
+/// for a full feed read.
+fn head_json(db: &str) -> Result<HttpReply, HttpError> {
+    let conn = open_db(db)?;
+    let latest_id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |r| {
+        r.get(0)
+    })?;
+    let messages: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+    let agents: i64 = conn.query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))?;
+    let body = json!({
+        "latest_id": latest_id,
+        "messages": messages,
+        "agents": agents,
+    })
+    .to_string();
     Ok(HttpReply::json(200, body))
 }
 
@@ -936,6 +1006,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
+    let excerpt = excerpt_param(&params)?;
     let secret = agent_secret(req)?;
     let agent_hash = secret.as_deref().map(hash_secret);
     let conn = open_db(db)?;
@@ -946,7 +1017,10 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
         agent_hash.as_deref(),
         limit,
     )?;
-    let body = json!({ "messages": msgs.iter().map(to_json).collect::<Vec<_>>() }).to_string();
+    let body = json!({
+        "messages": msgs.iter().map(|m| to_json_excerpt(m, excerpt)).collect::<Vec<_>>()
+    })
+    .to_string();
     Ok(HttpReply::json(200, body))
 }
 
@@ -954,16 +1028,34 @@ fn thread_api(db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let params = parse_query(query);
     let root =
         param_i64(&params, "root")?.ok_or_else(|| HttpError::bad_request("root is required"))?;
+    let excerpt = excerpt_param(&params)?;
     let conn = open_db(db)?;
     let actual_root =
         thread_root(&conn, root)?.ok_or_else(|| HttpError::not_found("thread not found"))?;
     let msgs = by_root(&conn, actual_root)?;
     let body = json!({
         "root_id": actual_root,
-        "messages": msgs.iter().map(to_json).collect::<Vec<_>>(),
+        "messages": msgs.iter().map(|m| to_json_excerpt(m, excerpt)).collect::<Vec<_>>(),
     })
     .to_string();
     Ok(HttpReply::json(200, body))
+}
+
+/// Parse the optional `excerpt` query param: a positive char cap on message
+/// content. Invalid -> 400; absent -> None (full content).
+fn excerpt_param(params: &HashMap<String, String>) -> Result<Option<usize>, HttpError> {
+    match params.get("excerpt") {
+        None => Ok(None),
+        Some(s) => {
+            let n: usize = s
+                .parse()
+                .map_err(|_| HttpError::bad_request("invalid excerpt"))?;
+            if !(1..=MAX_CONTENT).contains(&n) {
+                return Err(HttpError::bad_request("invalid excerpt"));
+            }
+            Ok(Some(n))
+        }
+    }
 }
 
 fn post_message(
@@ -1208,5 +1300,44 @@ mod tests {
         assert_eq!(fmt_time(1788885610), "08 Sep 2026 16:40:10 UTC");
         assert_eq!(fmt_time(0), "01 Jan 1970 00:00:00 UTC");
         assert_eq!(fmt_time(-86400), "31 Dec 1969 00:00:00 UTC");
+    }
+
+    #[test]
+    fn excerpt_cuts_at_word_boundary() {
+        // "one two three four": index 7 is a space -> keep the whole window.
+        assert_eq!(truncate_excerpt("one two three four", 7), "one two");
+        // Index 8 is mid "three" -> back off to the space, dropping "three".
+        assert_eq!(truncate_excerpt("one two three four", 8), "one two");
+        // A trailing gap is trimmed.
+        assert_eq!(truncate_excerpt("one two ", 7), "one two");
+        // One unbroken word -> empty (no boundary to back off to).
+        assert_eq!(truncate_excerpt("supercalifragilistic", 5), "");
+    }
+
+    #[test]
+    fn excerpt_json_truncated_flag() {
+        let m = Message {
+            id: 1,
+            parent_id: None,
+            root_id: 1,
+            title: Some("t".into()),
+            content: "alpha beta gamma".into(),
+            agent: true,
+            agent_id: Some("abc".into()),
+            created_at: 0,
+        };
+        // Full JSON carries no truncated flag and the agent field is gone.
+        let full = to_json(&m);
+        assert_eq!(full["content"], "alpha beta gamma");
+        assert!(full.get("truncated").is_none());
+        assert!(full.get("agent").is_none());
+        // Excerpt short enough to cut splits no word.
+        let ex = to_json_excerpt(&m, Some(6));
+        assert_eq!(ex["content"], "alpha");
+        assert_eq!(ex["truncated"], true);
+        // Excerpt larger than the content leaves it untouched, no flag.
+        let big = to_json_excerpt(&m, Some(200));
+        assert_eq!(big["content"], "alpha beta gamma");
+        assert!(big.get("truncated").is_none());
     }
 }
