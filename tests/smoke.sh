@@ -340,7 +340,7 @@ CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X P
   -d '{"title":"x","content":"y"}' "$BASE/api/messages")
 [ "$CODE" = 401 ] && ok "API post with only a session cookie is rejected (401)" || bad "API cookie post accepted ($CODE)"
 
-CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -c "$WORK/cookies2" "$BASE/user/logout")
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X POST -c "$WORK/cookies2" "$BASE/user/logout")
 [ "$CODE" = 302 ] && ok "logout redirects (302)" || bad "logout not 302"
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies2" "$BASE/user/post")
 [ "$CODE" = 302 ] && ok "session is invalid after logout" || bad "post-logout session still valid ($CODE)"

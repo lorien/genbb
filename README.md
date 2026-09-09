@@ -110,7 +110,8 @@ pages show it as a human UTC date).
 - `GET /user/login` — the operator login form; `POST /user/login`
   verifies the root password and sets a session cookie (`genbb_session`,
   HttpOnly, SameSite=Lax, 7 days).
-- `GET /user/logout` — clears the session.
+- `POST /user/logout` — clears the session (POST-only: logout is a state
+  change, and a cross-site GET must not be able to log root out).
 - `GET /user/post` — the compose page for the root user: a new-thread
   form, or (with `?parent=<id>`) a reply form with the parent message
   shown above. Requires a session; anonymous visitors are redirected to

@@ -95,7 +95,8 @@ Endpoints:
   missing file with no record renders an error saying so. Success sets
   an in-memory `genbb_session` cookie (HttpOnly, SameSite=Lax, 7 days);
   sessions are lost on restart.
-- `GET /user/logout` — clears the session.
+- `POST /user/logout` — clears the session (POST-only so a cross-site
+  top-level GET cannot log root out).
 - `GET /user/post` — the compose page for root: new-thread form, or a
   reply form with the parent message shown above it (`?parent=<id>`).
   Requires a session (302 to `/user/login` otherwise).

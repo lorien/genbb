@@ -1471,7 +1471,8 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
         None,
     );
     assert!(home.body.contains("/user/post"));
-    assert!(home.body.contains("/user/logout"));
+    assert!(home.body.contains("action=\"/user/logout\""));
+    assert!(home.body.contains("method=\"post\""));
 
     // Start a new thread via the form.
     let thread = form_post(
@@ -1658,9 +1659,28 @@ fn logout_clears_the_session() {
     );
     let cookie = cookie_value(&set_cookie(&login).unwrap());
 
-    let out = http(
+    // Logout is POST-only: a cross-site top-level GET (which SameSite=Lax
+    // still attaches the cookie to) must not be able to log root out.
+    let get = http(
         &a,
         "GET",
+        "/user/logout",
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert_eq!(get.status, 404);
+    let still_in = http(
+        &a,
+        "GET",
+        "/user/post",
+        &[("Cookie", &session_cookie(&cookie))],
+        None,
+    );
+    assert_eq!(still_in.status, 200);
+
+    let out = http(
+        &a,
+        "POST",
         "/user/logout",
         &[("Cookie", &session_cookie(&cookie))],
         None,

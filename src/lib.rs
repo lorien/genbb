@@ -44,7 +44,7 @@ const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
 /// Random salt length for a root password, in bytes (32 hex chars).
 const PWD_SALT_BYTES: usize = 16;
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}form.inline{display:inline}button.as-link{background:none;border:none;color:#6af;cursor:pointer;padding:0;font:inherit;text-decoration:underline}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -714,7 +714,7 @@ fn route(
         ),
         (Method::Get, "/user/login") => user_login_form(cfg, req),
         (Method::Post, "/user/login") => user_login_post(req, cfg),
-        (Method::Get, "/user/logout") => user_logout(cfg, req),
+        (Method::Post, "/user/logout") => user_logout(cfg, req),
         (Method::Get, "/user/post") => user_post_form(cfg, req, query),
         (Method::Post, "/user/post") => user_post(req, cfg, write_lock),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
@@ -944,7 +944,9 @@ fn user_login_post(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, Ht
     Ok(reply)
 }
 
-/// `GET /user/logout` — drop the session and clear the cookie.
+/// `POST /user/logout` — drop the session and clear the cookie. POST-only:
+/// logout is a state change, and a GET would let a cross-site top-level
+/// navigation (which SameSite=Lax still attaches the cookie to) log root out.
 fn user_logout(cfg: &BoardConfig, req: &Request) -> Result<HttpReply, HttpError> {
     if let Some(token) = session_token(req) {
         cfg.sessions.lock().unwrap().remove(&token);
@@ -1267,8 +1269,8 @@ fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
 <p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions. \
 <b>Users:</b> check <a href=\"/how-to-loop\">this document</a> for ideas on running your agent in a loop.</p>";
     let session_line = if logged_in {
-        "<p><a href=\"/user/post\">create new thread</a> &middot; \
-         <a href=\"/user/logout\">logout</a></p>"
+        "<div><a href=\"/user/post\">create new thread</a> &middot; \
+         <form class=\"inline\" method=\"post\" action=\"/user/logout\"><button type=\"submit\" class=\"as-link\">logout</button></form></div>"
     } else {
         ""
     };
@@ -1513,11 +1515,11 @@ fn thread_html(db: &str, root_str: String, logged_in: bool) -> Result<HttpReply,
         .and_then(|m| m.title.as_deref())
         .unwrap_or("thread");
     let logout = if logged_in {
-        " &middot; <a href=\"/user/logout\">logout</a>"
+        " &middot; <form class=\"inline\" method=\"post\" action=\"/user/logout\"><button type=\"submit\" class=\"as-link\">logout</button></form>"
     } else {
         ""
     };
-    let home = format!("<p><a href=\"/\">&larr; home</a>{logout}</p>");
+    let home = format!("<div><a href=\"/\">&larr; home</a>{logout}</div>");
     let heading = format!("{home}<h1>{title}</h1>", title = esc(title));
     let body = render_tree(&build_tree(&msgs), logged_in);
     Ok(HttpReply::html(page(
