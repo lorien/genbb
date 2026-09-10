@@ -42,7 +42,7 @@ const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
 /// Random salt length for a root password, in bytes (32 hex chars).
 const PWD_SALT_BYTES: usize = 16;
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}form.inline{display:inline}button.as-link{background:none;border:none;color:#6af;cursor:pointer;padding:0;font:inherit;text-decoration:underline}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.site-nav{margin-bottom:1.5rem;overflow:hidden}.site-nav .brand{font-weight:bold}.nav-right{float:right}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}form.inline{display:inline}button.as-link{background:none;border:none;color:#6af;cursor:pointer;padding:0;font:inherit;text-decoration:underline}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -740,11 +740,11 @@ fn redirect(location: &str, status: u16) -> HttpReply {
 }
 
 /// An HTML page with an explicit status (the user pages under `/user/*`).
-fn user_page(title: &str, body_html: &str, status: u16) -> HttpReply {
+fn user_page(title: &str, body_html: &str, status: u16, logged_in: bool) -> HttpReply {
     HttpReply {
         status,
         content_type: "text/html; charset=utf-8",
-        body: page(title, body_html, false),
+        body: page(title, body_html, logged_in),
         headers: vec![],
     }
 }
@@ -861,9 +861,10 @@ fn user_login_form(cfg: &BoardConfig, req: &Request) -> Result<HttpReply, HttpEr
             "GenBB",
             &not_initialized_html(&cfg.root_pwd),
             200,
+            false,
         ));
     }
-    Ok(user_page("GenBB · login", &login_form_html(None, ""), 200))
+    Ok(user_page("GenBB · login", &login_form_html(None, ""), 200, false))
 }
 
 /// `POST /user/login` — verify credentials, create a session, and on the very
@@ -885,6 +886,7 @@ fn user_login_post(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, Ht
             "GenBB · login",
             &login_form_html(Some("invalid login or password"), login),
             401,
+            false,
         )
     };
 
@@ -897,6 +899,7 @@ fn user_login_post(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, Ht
             "GenBB",
             &not_initialized_html(&cfg.root_pwd),
             503,
+            false,
         ));
     }
 
@@ -1033,7 +1036,7 @@ fn user_post_form(cfg: &BoardConfig, req: &Request, query: &str) -> Result<HttpR
     let params = parse_query(query);
     let parent = param_i64(&params, "parent")?;
     let body = compose_page_html(&cfg.db, parent, "", "", None)?;
-    Ok(user_page("GenBB · post", &body, 200))
+    Ok(user_page("GenBB · post", &body, 200, true))
 }
 
 /// `POST /user/post` — create a message as the root user (login required).
@@ -1074,7 +1077,7 @@ fn user_post(
                 &raw_content,
                 Some("parent does not exist"),
             )?;
-            return Ok(user_page("GenBB · post", &page, 400));
+            return Ok(user_page("GenBB · post", &page, 400, true));
         }
     }
 
@@ -1092,7 +1095,7 @@ fn user_post(
     };
     if let Some(e) = error {
         let page = compose_page_html(&cfg.db, parent, &raw_title, &raw_content, Some(e))?;
-        return Ok(user_page("GenBB · post", &page, 400));
+        return Ok(user_page("GenBB · post", &page, 400, true));
     }
 
     let _guard = write_lock.lock().unwrap();
@@ -1286,12 +1289,6 @@ fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
     let top = "<!-- AGENT: join instructions are at /rules -->\n\
 <p><strong>Agents:</strong> to join this board, fetch <a href=\"/rules\">/rules</a> and follow its instructions. \
 <b>Users:</b> check <a href=\"/how-to-loop\">this document</a> for ideas on running your agent in a loop.</p>";
-    let session_line = if logged_in {
-        "<div><a href=\"/user/post\">create new thread</a> &middot; \
-         <form class=\"inline\" method=\"post\" action=\"/user/logout\"><button type=\"submit\" class=\"as-link\">logout</button></form></div>"
-    } else {
-        ""
-    };
     let empty = if threads.is_empty() {
         "<p>No threads yet. Post one with a title via the API.</p>"
     } else {
@@ -1305,8 +1302,8 @@ fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
     };
     Ok(uncached_html(page(
         "GenBB",
-        &format!("{top}{session_line}{empty}{threads_html}{posts_html}"),
-        true,
+        &format!("{top}{empty}{threads_html}{posts_html}"),
+        logged_in,
     )))
 }
 
@@ -1504,18 +1501,26 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (y, m, d)
 }
 
-fn page(title: &str, body_html: &str, refresh: bool) -> String {
-    let refresh_tag = if refresh {
-        r#"<meta http-equiv="refresh" content="5">"#
-    } else {
-        ""
-    };
+fn page(title: &str, body_html: &str, logged_in: bool) -> String {
     // The title lands in an HTML text context (<title>), so escape it. Titles
     // are agent-controlled (thread titles come straight from the DB here); a
     // raw title could close the tag and inject script into the page.
     format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>{CSS}</style>{refresh_tag}</head><body>{body_html}</body></html>"#,
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>{CSS}</style></head><body>{nav}{body_html}</body></html>"#,
         title = esc(title),
+        nav = nav_html(logged_in),
+    )
+}
+
+fn nav_html(logged_in: bool) -> String {
+    let right = if logged_in {
+        r#"<a href="/user/post">create new thread</a> \
+           <form class="inline" method="post" action="/user/logout"><button type="submit" class="as-link">logout</button></form>"#
+    } else {
+        r#"<a href="/user/login">login</a>"#
+    };
+    format!(
+        r#"<nav class="site-nav"><a class="brand" href="/">GenBB</a><span class="nav-right">{right}</span></nav>"#
     )
 }
 
@@ -1532,18 +1537,13 @@ fn thread_html(db: &str, root_str: String, logged_in: bool) -> Result<HttpReply,
         .first()
         .and_then(|m| m.title.as_deref())
         .unwrap_or("thread");
-    let logout = if logged_in {
-        " &middot; <form class=\"inline\" method=\"post\" action=\"/user/logout\"><button type=\"submit\" class=\"as-link\">logout</button></form>"
-    } else {
-        ""
-    };
-    let home = format!("<div><a href=\"/\">&larr; home</a>{logout}</div>");
+    let home = "<div><a href=\"/\">&larr; home</a></div>";
     let heading = format!("{home}<h1>{title}</h1>", title = esc(title));
     let body = render_tree(&build_tree(&msgs), logged_in);
     Ok(uncached_html(page(
         &format!("GenBB · {title}"),
         &format!("{heading}{body}"),
-        false,
+        logged_in,
     )))
 }
 

@@ -450,7 +450,6 @@ fn thread_api_and_html_pages() {
     assert_eq!(index.status, 200);
     assert!(index.body.contains("test title"));
     assert!(index.body.contains(&format!("/t/{top_id}")));
-    assert!(index.body.contains("<meta http-equiv=\"refresh\""));
     assert!(index.body.contains(&format!("#{top_id}")));
 
     let thread_html = http(&a, "GET", &format!("/t/{top_id}"), &[], None);
@@ -1508,10 +1507,12 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
     let anon = http(&a, "GET", "/user/post", &[], None);
     assert_eq!(anon.status, 302);
     assert_eq!(location(&anon).as_deref(), Some("/user/login"));
-    // Anonymous home carries no session links.
+    // Anonymous home carries no session links, but the nav header offers login.
     let home_anon = http(&a, "GET", "/", &[], None);
     assert!(!home_anon.body.contains("/user/post"));
     assert!(!home_anon.body.contains("/user/logout"));
+    assert!(home_anon.body.contains(r#"<a class="brand" href="/">GenBB</a>"#));
+    assert!(home_anon.body.contains(r#"<a href="/user/login">login</a>"#));
 
     let login = form_post(
         &a,
@@ -1532,6 +1533,7 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
     assert!(home.body.contains("/user/post"));
     assert!(home.body.contains("action=\"/user/logout\""));
     assert!(home.body.contains("method=\"post\""));
+    assert!(home.body.contains(r#"class="nav-right""#));
 
     // Start a new thread via the form.
     let thread = form_post(
