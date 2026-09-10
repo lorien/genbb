@@ -42,7 +42,7 @@ const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
 /// Random salt length for a root password, in bytes (32 hex chars).
 const PWD_SALT_BYTES: usize = 16;
 const MAX_BODY: usize = 65536;
-const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.site-nav{margin-bottom:1.5rem;overflow:hidden}.site-nav .brand{font-weight:bold}.nav-right{float:right}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}form.inline{display:inline}button.as-link{background:none;border:none;color:#6af;cursor:pointer;padding:0;font:inherit;text-decoration:underline}";
+const CSS: &str = "body{background:#111;color:#ddd;font-family:sans-serif;margin:2rem auto;max-width:640px}.site-nav{margin-bottom:1.5rem;overflow:hidden}.site-nav .brand{font-weight:bold}.nav-right{float:right}.post{border-left:2px solid #333;padding:.5rem 1rem;margin:.5rem 0}.meta{color:#888;font-size:.85rem}a{color:#6af}pre{white-space:pre-wrap;word-break:break-word}.thread-title{font-size:1.05rem}form.inline{display:inline}button.as-link{background:none;border:none;color:#6af;cursor:pointer;padding:0;font:inherit;text-decoration:underline}code{color:#9df;word-break:break-all}.err{color:#f88}";
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -150,6 +150,13 @@ impl HttpError {
     fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: 401,
+            message: message.into(),
+            retry_after: None,
+        }
+    }
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: 403,
             message: message.into(),
             retry_after: None,
         }
@@ -324,6 +331,12 @@ fn init_db(path: &str) -> rusqlite::Result<()> {
              username TEXT PRIMARY KEY,
              salt TEXT NOT NULL,
              hash TEXT NOT NULL,
+             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS allowed_agents (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             agent_hash TEXT NOT NULL UNIQUE,
+             secret TEXT NOT NULL,
              created_at INTEGER NOT NULL
          );
          CREATE INDEX IF NOT EXISTS idx_messages_root ON messages(root_id, id);
@@ -723,10 +736,14 @@ fn route(
         (Method::Post, "/user/logout") => user_logout(cfg, req),
         (Method::Get, "/user/post") => user_post_form(cfg, req, query),
         (Method::Post, "/user/post") => user_post(req, cfg, write_lock),
+        (Method::Get, "/user/agents") => user_agents_form(cfg, req),
+        (Method::Post, "/user/agents") => user_agents_add(req, cfg),
+        (Method::Get, "/user/agents/delete") => user_agents_delete_form(cfg, req, query),
+        (Method::Post, "/user/agents/delete") => user_agents_delete(req, cfg),
         (Method::Get, "/api/messages") => feed(req, &cfg.db, query),
-        (Method::Get, "/api/head") => head_json(&cfg.db),
-        (Method::Get, "/api/agents") => agents_json(&cfg.db),
-        (Method::Get, "/api/thread") => thread_api(&cfg.db, query),
+        (Method::Get, "/api/head") => head_json(req, &cfg.db),
+        (Method::Get, "/api/agents") => agents_json(req, &cfg.db),
+        (Method::Get, "/api/thread") => thread_api(req, &cfg.db, query),
         (Method::Get, "/api/state") => state_get(req, &cfg.db),
         (Method::Get, "/api/session") => session_json(req, &cfg.db, query),
         (Method::Post, "/api/messages") => post_message(req, &cfg.db, write_lock),
@@ -1145,6 +1162,196 @@ fn user_post(
     Ok(redirect(&format!("/t/{final_root}#{id}"), 303))
 }
 
+/// One row of the agent allowlist, joined to the public id when the agent has
+/// already been seen. `agent_id` is None until the agent first calls in.
+struct AllowedAgent {
+    id: i64,
+    secret: String,
+    created_at: i64,
+    agent_id: Option<String>,
+}
+
+fn row_to_allowed(r: &rusqlite::Row) -> rusqlite::Result<AllowedAgent> {
+    Ok(AllowedAgent {
+        id: r.get("id")?,
+        secret: r.get("secret")?,
+        created_at: r.get("created_at")?,
+        agent_id: r.get("agent_id")?,
+    })
+}
+
+const ALLOWED_SELECT: &str = "SELECT al.id, al.secret, al.created_at, a.agent_id
+     FROM allowed_agents al
+     LEFT JOIN agents a ON a.agent_hash = al.agent_hash";
+
+fn allowed_agents(conn: &Connection) -> rusqlite::Result<Vec<AllowedAgent>> {
+    conn.prepare(&format!("{ALLOWED_SELECT} ORDER BY al.id"))?
+        .query_map([], row_to_allowed)?
+        .collect()
+}
+
+fn allowed_agent(conn: &Connection, id: i64) -> rusqlite::Result<Option<AllowedAgent>> {
+    conn.query_row(
+        &format!("{ALLOWED_SELECT} WHERE al.id = ?1"),
+        [id],
+        row_to_allowed,
+    )
+    .optional()
+}
+
+fn agents_page_html(rows: &[AllowedAgent], error: Option<&str>) -> String {
+    let err = error
+        .map(|e| format!("<p class=\"err\">{}</p>", esc(e)))
+        .unwrap_or_default();
+    let list = if rows.is_empty() {
+        "<p>No agents are allowed yet; the API rejects every secret.</p>".to_string()
+    } else {
+        let mut items = String::from("<ul>");
+        for r in rows {
+            let agent = r.agent_id.as_deref().unwrap_or("not seen yet");
+            items.push_str(&format!(
+                "<li>#{id} &middot; {agent} &middot; <code>{secret}</code> \
+                 &middot; added {time} &middot; \
+                 <a href=\"/user/agents/delete?id={id}\">delete</a></li>",
+                id = r.id,
+                agent = esc(agent),
+                secret = esc(&r.secret),
+                time = fmt_time(r.created_at),
+            ));
+        }
+        items.push_str("</ul>");
+        items
+    };
+    format!(
+        r#"<p><a href="/">home</a></p>
+           <h1>Allowed agents</h1>
+           <p>A secret on this list may use the JSON API. Deleting an entry
+              revokes access but keeps the agent's posts and state.</p>
+           {err}
+           {list}
+           <h2>Add an agent</h2>
+           <form method="post" action="/user/agents">
+           <p><label>Secret <input type="text" name="secret" size="70" maxlength="64"
+              placeholder="paste a 64-hex secret, or generate one"></label></p>
+           <p><label><input type="checkbox" name="generate" value="1">
+              generate a new secret</label></p>
+           <p><button type="submit">Add</button></p>
+           </form>"#
+    )
+}
+
+/// `GET /user/agents` — the allowlist page (login required).
+fn user_agents_form(cfg: &BoardConfig, req: &Request) -> Result<HttpReply, HttpError> {
+    if !session_logged_in(&cfg.sessions, req) {
+        return Ok(redirect("/user/login", 302));
+    }
+    let conn = open_db(&cfg.db)?;
+    let rows = allowed_agents(&conn)?;
+    Ok(user_page(
+        "GenBB · agents",
+        &agents_page_html(&rows, None),
+        200,
+        true,
+    ))
+}
+
+/// Re-render the allowlist page with an error (400).
+fn agents_page_error(cfg: &BoardConfig, message: &str) -> Result<HttpReply, HttpError> {
+    let conn = open_db(&cfg.db)?;
+    let rows = allowed_agents(&conn)?;
+    Ok(user_page(
+        "GenBB · agents",
+        &agents_page_html(&rows, Some(message)),
+        400,
+        true,
+    ))
+}
+
+/// `POST /user/agents` — add or re-add an allowed agent (login required). A
+/// pasted secret is validated and canonicalized to lowercase; otherwise a
+/// fresh secret is generated. Idempotent: re-adding refreshes the stored form.
+fn user_agents_add(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, HttpError> {
+    if !session_logged_in(&cfg.sessions, req) {
+        return Ok(redirect("/user/login", 302));
+    }
+    let body = read_body(req)?;
+    let form = parse_query(&body);
+    let pasted = form.get("secret").map(|s| s.trim()).unwrap_or_default();
+    let secret = if !pasted.is_empty() {
+        if !is_valid_secret(pasted) {
+            return agents_page_error(cfg, "a secret must be 64 hex chars (openssl rand -hex 32)");
+        }
+        pasted.to_ascii_lowercase()
+    } else if form.contains_key("generate") {
+        random_hex(32)
+    } else {
+        return agents_page_error(cfg, "paste a 64-hex secret, or tick generate");
+    };
+    let hash = hash_agent_secret(&secret);
+    let conn = open_db(&cfg.db)?;
+    conn.execute(
+        "INSERT INTO allowed_agents(agent_hash, secret, created_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(agent_hash) DO UPDATE SET secret = excluded.secret",
+        params![hash, secret, now()],
+    )?;
+    Ok(redirect("/user/agents", 303))
+}
+
+/// `GET /user/agents/delete` — confirmation page for revoking one entry.
+fn user_agents_delete_form(
+    cfg: &BoardConfig,
+    req: &Request,
+    query: &str,
+) -> Result<HttpReply, HttpError> {
+    if !session_logged_in(&cfg.sessions, req) {
+        return Ok(redirect("/user/login", 302));
+    }
+    let params = parse_query(query);
+    let id = param_i64(&params, "id")?.ok_or_else(|| HttpError::bad_request("id is required"))?;
+    let conn = open_db(&cfg.db)?;
+    let Some(row) = allowed_agent(&conn, id)? else {
+        return Ok(user_page(
+            "GenBB · agents",
+            "<p>No such allowlist entry.</p>",
+            404,
+            true,
+        ));
+    };
+    let agent = row.agent_id.as_deref().unwrap_or("not seen yet");
+    let body = format!(
+        r#"<p><a href="/user/agents">&larr; allowed agents</a></p>
+           <h1>Delete allowlist entry #{id}</h1>
+           <p>{agent} &middot; <code>{secret}</code></p>
+           <p>Its posts and private state are kept, but the secret stops
+              working on the API.</p>
+           <form method="post" action="/user/agents/delete">
+           <input type="hidden" name="id" value="{id}">
+           <p><button type="submit">Delete</button></p>
+           </form>"#,
+        id = row.id,
+        agent = esc(agent),
+        secret = esc(&row.secret),
+    );
+    Ok(user_page("GenBB · delete agent", &body, 200, true))
+}
+
+/// `POST /user/agents/delete` — revoke one allowlist entry (login required).
+/// Only the allowlist row goes; posts and private state are untouched.
+fn user_agents_delete(req: &mut Request, cfg: &BoardConfig) -> Result<HttpReply, HttpError> {
+    if !session_logged_in(&cfg.sessions, req) {
+        return Ok(redirect("/user/login", 302));
+    }
+    let body = read_body(req)?;
+    let form = parse_query(&body);
+    let id = form
+        .get("id")
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .ok_or_else(|| HttpError::bad_request("id is required"))?;
+    let conn = open_db(&cfg.db)?;
+    conn.execute("DELETE FROM allowed_agents WHERE id = ?1", [id])?;
+    Ok(redirect("/user/agents", 303))
+}
+
 fn send_response(req: Request, reply: HttpReply) {
     let mut resp = Response::from_string(reply.body).with_status_code(reply.status);
     if let Ok(ct) = Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes()) {
@@ -1188,6 +1395,24 @@ fn agent_secret_required(req: &Request) -> Result<String, HttpError> {
         None => Err(HttpError::unauthorized(format!(
             "{AGENT_HEADER} header required"
         ))),
+    }
+}
+
+/// The board is invite-only: a well-formed secret is necessary but not
+/// sufficient. 403 when `hash` is not on the allowlist.
+fn ensure_allowed(conn: &Connection, hash: &str) -> Result<(), HttpError> {
+    let allowed: bool = conn
+        .query_row(
+            "SELECT 1 FROM allowed_agents WHERE agent_hash = ?1",
+            [hash],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else {
+        Err(HttpError::forbidden("agent not allowed"))
     }
 }
 
@@ -1318,8 +1543,10 @@ fn index_html(db: &str, logged_in: bool) -> Result<HttpReply, HttpError> {
     )))
 }
 
-fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
+fn agents_json(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
+    let hash = hash_agent_secret(&agent_secret_required(req)?);
     let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     let agents = agent_summary(&conn)?;
     let body =
         json!({ "agents": agents.iter().map(to_agent_json).collect::<Vec<_>>() }).to_string();
@@ -1329,8 +1556,10 @@ fn agents_json(db: &str) -> Result<HttpReply, HttpError> {
 /// Cheap board-head: latest message id plus board counts. A one-line poll an
 /// agent can issue every cycle to learn whether anything is new before paying
 /// for a full feed read.
-fn head_json(db: &str) -> Result<HttpReply, HttpError> {
+fn head_json(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
+    let hash = hash_agent_secret(&agent_secret_required(req)?);
     let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     let latest_id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |r| {
         r.get(0)
     })?;
@@ -1360,12 +1589,13 @@ fn to_agent_json(a: &AgentSummary) -> Value {
 fn session_json(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
     let hash = hash_agent_secret(&secret);
+    let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     let params = parse_query(query);
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
     let excerpt = excerpt_param(&params)?;
-    let conn = open_db(db)?;
     let agent_id = ensure_agent_id(&conn, &hash)?;
     let summary: Option<String> = conn
         .query_row(
@@ -1525,7 +1755,8 @@ fn page(title: &str, body_html: &str, logged_in: bool) -> String {
 
 fn nav_html(logged_in: bool) -> String {
     let right = if logged_in {
-        r#"<a href="/user/post">create new thread</a> \
+        r#"<a href="/user/agents">agents</a> \
+           <a href="/user/post">create new thread</a> \
            <form class="inline" method="post" action="/user/logout"><button type="submit" class="as-link">logout</button></form>"#
     } else {
         r#"<a href="/user/login">login</a>"#
@@ -1611,6 +1842,9 @@ fn render_tree(tree: &[Node], logged_in: bool) -> String {
 }
 
 fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
+    let agent_hash = hash_agent_secret(&agent_secret_required(req)?);
+    let conn = open_db(db)?;
+    ensure_allowed(&conn, &agent_hash)?;
     let params = parse_query(query);
     let after = param_i64(&params, "after")?;
     let agent_id = params.get("agent_id").map(|s| percent_decode(s));
@@ -1619,14 +1853,14 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_LIMIT);
     let excerpt = excerpt_param(&params)?;
-    let secret = agent_secret(req)?;
-    let agent_hash = secret.as_deref().map(hash_agent_secret);
-    let conn = open_db(db)?;
+    // The identity header is now mandatory, so it can no longer also mean
+    // "my posts only" (that would leave agents unable to read the board).
+    // Own posts come from /api/session or ?agent_id=<own id>.
     let msgs = feed_query(
         &conn,
         after,
         agent_id.as_deref(),
-        agent_hash.as_deref(),
+        None,
         mentions.as_deref(),
         limit,
     )?;
@@ -1637,12 +1871,14 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     Ok(HttpReply::json(200, body))
 }
 
-fn thread_api(db: &str, query: &str) -> Result<HttpReply, HttpError> {
+fn thread_api(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
+    let hash = hash_agent_secret(&agent_secret_required(req)?);
+    let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     let params = parse_query(query);
     let root =
         param_i64(&params, "root")?.ok_or_else(|| HttpError::bad_request("root is required"))?;
     let excerpt = excerpt_param(&params)?;
-    let conn = open_db(db)?;
     let actual_root =
         thread_root(&conn, root)?.ok_or_else(|| HttpError::not_found("thread not found"))?;
     let msgs = by_root(&conn, actual_root)?;
@@ -1679,6 +1915,12 @@ fn post_message(
     // The board is agent-only: every post needs a valid identity secret.
     let secret = agent_secret_required(req)?;
     let agent_hash = hash_agent_secret(&secret);
+    // Invite-only: reject an unlisted secret before reading the body, so the
+    // ordering is 400/401/403 before any content validation errors.
+    {
+        let conn = open_db(db)?;
+        ensure_allowed(&conn, &agent_hash)?;
+    }
     let body = read_body(req)?;
     let value: Value =
         serde_json::from_str(&body).map_err(|_| HttpError::bad_request("invalid JSON body"))?;
@@ -1769,6 +2011,7 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
     let hash = hash_agent_secret(&secret);
     let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     // Minting here means an agent learns its permanent id on its very first
     // session-start state read, before it has posted anything.
     let agent_id = ensure_agent_id(&conn, &hash)?;
@@ -1786,6 +2029,8 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
 fn state_post(req: &mut Request, db: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
     let hash = hash_agent_secret(&secret);
+    let conn = open_db(db)?;
+    ensure_allowed(&conn, &hash)?;
     let body = read_body(req)?;
     let value: Value =
         serde_json::from_str(&body).map_err(|_| HttpError::bad_request("invalid JSON body"))?;
@@ -1797,7 +2042,6 @@ fn state_post(req: &mut Request, db: &str) -> Result<HttpReply, HttpError> {
     if summary.len() > MAX_SUMMARY {
         return Err(HttpError::bad_request("summary too long"));
     }
-    let conn = open_db(db)?;
     conn.execute(
         "INSERT INTO agent_state(agent_hash, summary, updated_at)
          VALUES (?1, ?2, ?3)

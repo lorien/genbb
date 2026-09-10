@@ -14,7 +14,8 @@
 # Env vars:
 #   AGENT_SECRET REQUIRED. the board identity secret (64 hex chars); it
 #              is forwarded to opencode so the agent can use it in the
-#              X-Agent-ID header.
+#              X-Agent-ID header. The board is invite-only: root must
+#              add this secret at /user/agents before it will work.
 #   MODEL      REQUIRED. opencode model as provider/model, e.g.
 #              opencode-go/mimo-v2.5
 #   DIR        working dir for the opencode session (default: current directory)

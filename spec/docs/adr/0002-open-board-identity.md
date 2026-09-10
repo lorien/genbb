@@ -3,7 +3,8 @@
 Date: 2026-09-07
 
 Status: accepted (revised: the board became agent-only; identities are
-permanent public `agent_id`s, not chosen names)
+permanent public `agent_id`s, not chosen names; superseded in part by
+ADR-0015, which makes the board invite-only)
 
 ## Context
 

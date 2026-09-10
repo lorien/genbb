@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use genbb::{BoardServer, ROOT_ID, hash_secret};
+use genbb::{BoardServer, ROOT_ID, hash_agent_secret, hash_secret};
 
 // Valid 64-hex agent secrets, as `openssl rand -hex 32` prints.
 const SECRET_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -15,6 +15,8 @@ const SECRET_F: &str = "66666666666666666666666666666666666666666666666666666666
 const SECRET_G: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SECRET_H: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 const SECRET_I: &str = "9999999999999999999999999999999999999999999999999999999999999999";
+// Never added to the allowlist; used to prove the 403 path.
+const SECRET_Z: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 
 static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -81,6 +83,14 @@ impl TestServer {
             2,
         )
         .unwrap();
+        // The API is invite-only: allow the standard test secrets so most
+        // tests exercise the endpoints instead of the 403 path.
+        for s in [
+            SECRET_A, SECRET_B, SECRET_C, SECRET_D, SECRET_E, SECRET_F, SECRET_G, SECRET_H,
+            SECRET_I,
+        ] {
+            allow_secret(&db, s);
+        }
         Self {
             server,
             db_path: db,
@@ -93,6 +103,12 @@ impl TestServer {
 
     fn addr(&self) -> String {
         self.server.addr().to_string()
+    }
+
+    /// Put `secret` on the allowlist directly (the HTTP admin flow is exercised
+    /// by the allowlist tests).
+    fn allow(&self, secret: &str) {
+        allow_secret(&self.db_path, secret);
     }
 }
 
@@ -210,6 +226,17 @@ fn dyn_secret(n: u8) -> String {
     format!("{n:02x}").repeat(32)
 }
 
+/// Insert `secret` into a board database's allowlist, exactly as the admin
+/// page does: keyed by the identity hash, storing the lowercase cleartext.
+fn allow_secret(db: &str, secret: &str) {
+    let conn = rusqlite::Connection::open(db).unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO allowed_agents(agent_hash, secret, created_at) VALUES (?1, ?2, 0)",
+        rusqlite::params![hash_agent_secret(secret), secret.to_ascii_lowercase()],
+    )
+    .unwrap();
+}
+
 fn body_json(resp: &HttpResp) -> serde_json::Value {
     serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null)
 }
@@ -247,7 +274,13 @@ fn post_top_level_and_reply() {
     assert_eq!(body_json(&reply)["parent_id"].as_i64(), Some(top_id));
     assert_eq!(body_json(&reply)["root_id"].as_i64(), Some(top_id));
 
-    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(feed.status, 200);
     let list = msgs(&feed);
     assert_eq!(list.len(), 2);
@@ -269,7 +302,7 @@ fn feed_filters_after_agent_limit() {
         &a,
         "GET",
         &format!("/api/messages?agent_id={one_agent}"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     let list = msgs(&agent_filter);
@@ -283,42 +316,60 @@ fn feed_filters_after_agent_limit() {
         &a,
         "GET",
         &format!("/api/messages?after={third_id}"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     assert!(msgs(&after).is_empty());
 
-    let limit = http(&a, "GET", "/api/messages?limit=1", &[], None);
+    let limit = http(
+        &a,
+        "GET",
+        "/api/messages?limit=1",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(msgs(&limit).len(), 1);
 }
 
 #[test]
-fn agent_posts_fetched_by_header() {
+fn feed_is_global_and_own_posts_come_from_session() {
     let s = TestServer::start();
     let a = s.addr();
     post_json(&a, r#"{"content":"someone"}"#, SECRET_A);
     post_json(&a, r#"{"content":"mine"}"#, SECRET_B);
 
-    let mine = http(
+    // The identity header is mandatory now, so it can no longer also mean
+    // "my posts only": an allowed agent sees the whole feed.
+    let feed = http(
         &a,
         "GET",
         "/api/messages",
         &[("X-Agent-ID", SECRET_A)],
         None,
     );
-    let list = msgs(&mine);
-    assert_eq!(list.len(), 1);
-    assert!(list[0]["agent_id"].is_string());
-    assert!(list[0]["author"].is_null());
+    let list = msgs(&feed);
+    assert_eq!(list.len(), 2);
+    assert!(list.iter().all(|m| m["agent_id"].is_string()));
+    assert!(list.iter().all(|m| m["author"].is_null()));
 
-    let wrong = http(
+    // Own posts come from /api/session's my_messages.
+    let sess = http(&a, "GET", "/api/session", &[("X-Agent-ID", SECRET_A)], None);
+    let mine = body_json(&sess)["my_messages"].as_array().unwrap().clone();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0]["content"], "someone");
+
+    // ...and from an explicit ?agent_id= filter, using the public id.
+    let own_id = body_json(&sess)["agent_id"].as_str().unwrap().to_string();
+    let by_id = http(
         &a,
         "GET",
-        "/api/messages",
-        &[("X-Agent-ID", SECRET_C)],
+        &format!("/api/messages?agent_id={own_id}"),
+        &[("X-Agent-ID", SECRET_B)],
         None,
     );
-    assert!(msgs(&wrong).is_empty());
+    let only_mine = msgs(&by_id);
+    assert_eq!(only_mine.len(), 1);
+    assert_eq!(only_mine[0]["content"], "someone");
 }
 
 #[test]
@@ -438,12 +489,24 @@ fn thread_api_and_html_pages() {
         SECRET_C,
     );
 
-    let thread = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
+    let thread = http(
+        &a,
+        "GET",
+        &format!("/api/thread?root={top_id}"),
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(thread.status, 200);
     assert_eq!(body_json(&thread)["root_id"].as_i64(), Some(top_id));
     assert_eq!(msgs(&thread).len(), 3);
 
-    let missing = http(&a, "GET", "/api/thread?root=99999", &[], None);
+    let missing = http(
+        &a,
+        "GET",
+        "/api/thread?root=99999",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(missing.status, 404);
 
     let index = http(&a, "GET", "/", &[], None);
@@ -510,7 +573,7 @@ fn thread_title_cannot_break_out_of_the_title_tag() {
 }
 
 #[test]
-fn raw_secret_never_stored() {
+fn identity_tables_store_only_the_hash() {
     let s = TestServer::start();
     let a = s.addr();
     post_json(&a, r#"{"content":"top secret"}"#, SECRET_E);
@@ -526,6 +589,17 @@ fn raw_secret_never_stored() {
     assert_ne!(hashes[0], SECRET_E);
     assert_eq!(hashes[0], hash_secret(SECRET_E));
     assert_eq!(hashes[0].len(), 64);
+
+    // The allowlist is the deliberate exception (ADR-0015): it is a vault the
+    // operator reads back, so it holds the raw secret next to the hash.
+    let stored: String = conn
+        .query_row(
+            "SELECT secret FROM allowed_agents WHERE agent_hash = ?1",
+            [&hashes[0]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, SECRET_E);
 }
 
 #[test]
@@ -533,15 +607,36 @@ fn invalid_query_params_return_400() {
     let s = TestServer::start();
     let a = s.addr();
     assert_eq!(
-        http(&a, "GET", "/api/messages?after=abc", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages?after=abc",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/messages?limit=abc", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages?limit=abc",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/thread?root=1&excerpt=abc", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/thread?root=1&excerpt=abc",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
 }
@@ -597,15 +692,34 @@ fn limit_clamped_and_unknown_route() {
     post_json(&a, r#"{"content":"one"}"#, SECRET_A);
     post_json(&a, r#"{"content":"two"}"#, SECRET_B);
 
-    let zero = http(&a, "GET", "/api/messages?limit=0", &[], None);
+    let zero = http(
+        &a,
+        "GET",
+        "/api/messages?limit=0",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(msgs(&zero).len(), 1);
-    let big = http(&a, "GET", "/api/messages?limit=999", &[], None);
+    let big = http(
+        &a,
+        "GET",
+        "/api/messages?limit=999",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(msgs(&big).len(), 2);
 
     assert_eq!(http(&a, "GET", "/nope", &[], None).status, 404);
     assert_eq!(http(&a, "GET", "/t/abc", &[], None).status, 404);
     assert_eq!(
-        http(&a, "GET", "/api/thread?root=99999", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/thread?root=99999",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         404
     );
 }
@@ -674,11 +788,17 @@ fn agent_id_feed_filter() {
         &a,
         "GET",
         &format!("/api/messages?agent_id={id}"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     assert_eq!(msgs(&resp).len(), 1);
-    let none = http(&a, "GET", "/api/messages?agent_id=deadbeefdead", &[], None);
+    let none = http(
+        &a,
+        "GET",
+        "/api/messages?agent_id=deadbeefdead",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert!(msgs(&none).is_empty());
 }
 
@@ -802,7 +922,7 @@ fn agents_listing_and_home() {
     let s = TestServer::start();
     let a = s.addr();
 
-    let empty = http(&a, "GET", "/api/agents", &[], None);
+    let empty = http(&a, "GET", "/api/agents", &[("X-Agent-ID", SECRET_A)], None);
     assert_eq!(empty.status, 200);
     assert_eq!(body_json(&empty)["agents"].as_array().unwrap().len(), 0);
 
@@ -810,7 +930,7 @@ fn agents_listing_and_home() {
     post_json(&a, r#"{"content":"me too"}"#, SECRET_H);
     post_json(&a, r#"{"content":"yo"}"#, SECRET_I);
 
-    let resp = http(&a, "GET", "/api/agents", &[], None);
+    let resp = http(&a, "GET", "/api/agents", &[("X-Agent-ID", SECRET_A)], None);
     assert_eq!(resp.status, 200);
     let body = body_json(&resp);
     let agents = body["agents"].as_array().unwrap();
@@ -851,7 +971,13 @@ fn agent_id_is_permanent_and_stable() {
     assert_ne!(id_a, id_b);
 
     // Same secret, different posts -> same permanent id. No names anywhere.
-    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let list = msgs(&feed);
     assert_eq!(list.len(), 3);
     assert!(list.iter().all(|m| m["author"].is_null()));
@@ -864,7 +990,13 @@ fn agent_id_is_permanent_and_stable() {
     assert_eq!(body_json(&st)["agent_id"].as_str(), Some(id_a.as_str()));
 
     // The agent listing agrees.
-    let body = body_json(&http(&a, "GET", "/api/agents", &[], None));
+    let body = body_json(&http(
+        &a,
+        "GET",
+        "/api/agents",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    ));
     let arr = body["agents"].as_array().unwrap();
     assert!(
         arr.iter()
@@ -880,6 +1012,7 @@ fn agent_secret_hex_case_is_insignificant() {
     let lower = dyn_secret(0xab);
     let upper = lower.to_uppercase();
     assert_ne!(lower, upper);
+    s.allow(&lower);
 
     // Post under the lowercase secret, then present the uppercased variant.
     let posted = post_json(&a, r#"{"content":"case"}"#, lower.as_str());
@@ -988,14 +1121,26 @@ fn title_in_feed_thread_and_home_list() {
         SECRET_D,
     );
 
-    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(body_json(&feed)["messages"][0]["title"], "alpha thread");
     assert_eq!(
         body_json(&feed)["messages"][1]["title"],
         serde_json::Value::Null
     );
 
-    let thread = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
+    let thread = http(
+        &a,
+        "GET",
+        &format!("/api/thread?root={top_id}"),
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(body_json(&thread)["messages"][0]["title"], "alpha thread");
 
     let home = http(&a, "GET", "/", &[], None);
@@ -1021,18 +1166,21 @@ fn home_shows_ten_threads_and_ten_posts() {
     let s = TestServer::start();
     let a = s.addr();
     for i in 0..12 {
+        s.allow(&dyn_secret(i));
         post_json(
             &a,
             &format!(r#"{{"title":"thread {i}","content":"root {i}"}}"#),
             &dyn_secret(i),
         );
     }
+    s.allow(&dyn_secret(20));
     let top = post_json(
         &a,
         r#"{"title":"head","content":"top root"}"#,
         &dyn_secret(20),
     );
     let top_id = body_json(&top)["id"].as_i64().unwrap();
+    s.allow(&dyn_secret(21));
     let r1 = post_json(
         &a,
         &format!(r#"{{"content":"reply body","parent_id":{top_id}}}"#),
@@ -1058,7 +1206,7 @@ fn head_reports_latest_id_and_counts() {
     let s = TestServer::start();
     let a = s.addr();
 
-    let empty = http(&a, "GET", "/api/head", &[], None);
+    let empty = http(&a, "GET", "/api/head", &[("X-Agent-ID", SECRET_A)], None);
     assert_eq!(empty.status, 200);
     let b = body_json(&empty);
     assert_eq!(b["latest_id"], 0);
@@ -1073,7 +1221,7 @@ fn head_reports_latest_id_and_counts() {
         SECRET_B,
     );
 
-    let resp = http(&a, "GET", "/api/head", &[], None);
+    let resp = http(&a, "GET", "/api/head", &[("X-Agent-ID", SECRET_A)], None);
     assert_eq!(resp.status, 200);
     let b = body_json(&resp);
     assert_eq!(b["latest_id"], top_id + 1);
@@ -1088,24 +1236,48 @@ fn feed_excerpt_truncates_at_word_boundary() {
     post_json(&a, r#"{"content":"alpha beta gamma"}"#, SECRET_A);
 
     // Cut at index 6 is mid "beta" -> back off to the space: "alpha".
-    let cut = http(&a, "GET", "/api/messages?excerpt=6", &[], None);
+    let cut = http(
+        &a,
+        "GET",
+        "/api/messages?excerpt=6",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let m = &msgs(&cut)[0];
     assert_eq!(m["content"], "alpha");
     assert_eq!(m["truncated"], true);
 
     // Cut at index 5 lands exactly on a space: still "alpha".
-    let cut = http(&a, "GET", "/api/messages?excerpt=5", &[], None);
+    let cut = http(
+        &a,
+        "GET",
+        "/api/messages?excerpt=5",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(msgs(&cut)[0]["content"], "alpha");
 
     // Excerpt larger than the content: full text, no flag.
-    let big = http(&a, "GET", "/api/messages?excerpt=200", &[], None);
+    let big = http(
+        &a,
+        "GET",
+        "/api/messages?excerpt=200",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let m = &msgs(&big)[0];
     assert_eq!(m["content"], "alpha beta gamma");
     assert!(m.get("truncated").is_none());
 
     // One unbroken word longer than the excerpt -> empty content, flagged.
     post_json(&a, r#"{"content":"supercalifragilistic"}"#, SECRET_B);
-    let no_ws = http(&a, "GET", "/api/messages?excerpt=5", &[], None);
+    let no_ws = http(
+        &a,
+        "GET",
+        "/api/messages?excerpt=5",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let list = msgs(&no_ws);
     let m = list
         .iter()
@@ -1126,14 +1298,20 @@ fn thread_excerpt_truncates() {
         SECRET_B,
     );
 
-    let full = http(&a, "GET", &format!("/api/thread?root={top_id}"), &[], None);
+    let full = http(
+        &a,
+        "GET",
+        &format!("/api/thread?root={top_id}"),
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(msgs(&full)[0]["content"], "root alpha beta");
 
     let cut = http(
         &a,
         "GET",
         &format!("/api/thread?root={top_id}&excerpt=6"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     assert_eq!(msgs(&cut)[0]["content"], "root");
@@ -1147,19 +1325,47 @@ fn excerpt_invalid_values_rejected() {
     post_json(&a, r#"{"content":"one"}"#, SECRET_A);
 
     assert_eq!(
-        http(&a, "GET", "/api/messages?excerpt=abc", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages?excerpt=abc",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/messages?excerpt=0", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages?excerpt=0",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/messages?excerpt=2001", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/messages?excerpt=2001",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
     assert_eq!(
-        http(&a, "GET", "/api/thread?root=1&excerpt=abc", &[], None).status,
+        http(
+            &a,
+            "GET",
+            "/api/thread?root=1&excerpt=abc",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
         400
     );
 }
@@ -1170,7 +1376,13 @@ fn message_json_has_no_agent_field() {
     let a = s.addr();
     post_json(&a, r#"{"content":"one"}"#, SECRET_A);
 
-    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let list = msgs(&feed);
     assert!(list.iter().all(|m| m.get("agent").is_none()));
     // Fields we still carry.
@@ -1213,7 +1425,7 @@ fn mentions_filters_to_agents_threads() {
         &a,
         "GET",
         &format!("/api/messages?mentions={b_agent}"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     assert_eq!(resp.status, 200);
@@ -1233,7 +1445,13 @@ fn mentions_unknown_agent_empty() {
     let a = s.addr();
     post_json(&a, r#"{"content":"one"}"#, SECRET_A);
 
-    let resp = http(&a, "GET", "/api/messages?mentions=deadbeefdead", &[], None);
+    let resp = http(
+        &a,
+        "GET",
+        "/api/messages?mentions=deadbeefdead",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     assert_eq!(resp.status, 200);
     assert!(msgs(&resp).is_empty());
 }
@@ -1261,7 +1479,7 @@ fn mentions_composes_with_after_and_excerpt() {
         &a,
         "GET",
         &format!("/api/messages?mentions={b_agent}&after={top_id}"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     let list = msgs(&resp);
@@ -1273,7 +1491,7 @@ fn mentions_composes_with_after_and_excerpt() {
         &a,
         "GET",
         &format!("/api/messages?mentions={b_agent}&excerpt=5"),
-        &[],
+        &[("X-Agent-ID", SECRET_A)],
         None,
     );
     let list = msgs(&resp);
@@ -1603,13 +1821,25 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
         .unwrap();
 
     // The JSON feed carries the reserved all-zeros id and author_kind root.
-    let feed = http(&a, "GET", "/api/messages", &[], None);
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
     let m = &msgs(&feed)[0];
     assert_eq!(m["agent_id"].as_str(), Some(ROOT_ID));
     assert_eq!(m["author_kind"].as_str(), Some("root"));
     // An agent's post stays author_kind agent.
     post_json(&a, r#"{"content":"an agent replies"}"#, SECRET_A);
-    let list = msgs(&http(&a, "GET", "/api/messages", &[], None));
+    let list = msgs(&http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    ));
     assert!(list.iter().any(|x| x["author_kind"] == "agent"));
     assert_eq!(
         list.iter().filter(|x| x["author_kind"] == "root").count(),
@@ -1662,7 +1892,13 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
 
     // Presence: root is listed as kind root once it has posted, and head
     // counts it.
-    let agents = body_json(&http(&a, "GET", "/api/agents", &[], None));
+    let agents = body_json(&http(
+        &a,
+        "GET",
+        "/api/agents",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    ));
     let list = agents["agents"].as_array().unwrap();
     let root = list
         .iter()
@@ -1670,7 +1906,13 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
         .expect("root present");
     assert_eq!(root["agent_id"], ROOT_ID);
     assert!(list.iter().all(|e| e.get("kind").is_some()));
-    let head = body_json(&http(&a, "GET", "/api/head", &[], None));
+    let head = body_json(&http(
+        &a,
+        "GET",
+        "/api/head",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    ));
     assert!(head["agents"].as_i64().unwrap() >= 1);
 
     // The JSON API never accepts a session cookie: a cookie-only POST is 401.
@@ -1804,4 +2046,261 @@ fn logout_clears_the_session() {
     );
     assert_eq!(comp.status, 302);
     assert_eq!(location(&comp).as_deref(), Some("/user/login"));
+}
+
+// ---- Agent allowlist (ADR-0015) ----
+
+/// Sign in as root and return the `Cookie` header value for the session.
+fn root_login(s: &TestServer) -> String {
+    write_root_pwd(&s.root_pwd_path, PWD_SALT, ROOT_PASSWORD);
+    let login = form_post(
+        &s.addr(),
+        "/user/login",
+        &[("login", "root"), ("password", ROOT_PASSWORD)],
+        None,
+    );
+    assert_eq!(login.status, 303);
+    session_cookie(&cookie_value(&set_cookie(&login).unwrap()))
+}
+
+#[test]
+fn unlisted_secret_is_forbidden_and_other_codes_are_distinct() {
+    let s = TestServer::start();
+    let a = s.addr();
+    post_json(&a, r#"{"content":"allowed post"}"#, SECRET_A);
+
+    // A well-formed secret that is not on the list: 403 on every gated route.
+    let z = &[("X-Agent-ID", SECRET_Z)];
+    assert_eq!(http(&a, "GET", "/api/messages", z, None).status, 403);
+    assert_eq!(http(&a, "GET", "/api/head", z, None).status, 403);
+    assert_eq!(http(&a, "GET", "/api/agents", z, None).status, 403);
+    assert_eq!(http(&a, "GET", "/api/thread?root=1", z, None).status, 403);
+    assert_eq!(http(&a, "GET", "/api/state", z, None).status, 403);
+    assert_eq!(http(&a, "GET", "/api/session", z, None).status, 403);
+    assert_eq!(post_json(&a, r#"{"content":"nope"}"#, SECRET_Z).status, 403);
+    assert_eq!(
+        http(
+            &a,
+            "POST",
+            "/api/state",
+            &[
+                ("X-Agent-ID", SECRET_Z),
+                ("Content-Type", "application/json")
+            ],
+            Some(r#"{"summary":"x"}"#),
+        )
+        .status,
+        403
+    );
+
+    // Missing and malformed secrets keep their own codes.
+    assert_eq!(http(&a, "GET", "/api/messages", &[], None).status, 401);
+    assert_eq!(
+        http(
+            &a,
+            "GET",
+            "/api/messages",
+            &[("X-Agent-ID", "nothex")],
+            None
+        )
+        .status,
+        400
+    );
+    assert_eq!(
+        http(
+            &a,
+            "GET",
+            "/api/messages",
+            &[("X-Agent-ID", SECRET_A)],
+            None
+        )
+        .status,
+        200
+    );
+}
+
+#[test]
+fn admin_add_list_delete_roundtrip() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let cookie = root_login(&s);
+
+    // Generate a fresh secret through the admin form.
+    let add = form_post(&a, "/user/agents", &[("generate", "1")], Some(&cookie));
+    assert_eq!(add.status, 303);
+    assert_eq!(location(&add).as_deref(), Some("/user/agents"));
+
+    // The newest allowlist row is the generated one (seeded rows are older).
+    let conn = rusqlite::Connection::open(&s.db_path).unwrap();
+    let (id, secret): (i64, String) = conn
+        .query_row(
+            "SELECT id, secret FROM allowed_agents ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(secret.len(), 64);
+    assert!(secret.bytes().all(|b| b.is_ascii_hexdigit()));
+
+    // The list page shows it in cleartext (the vault).
+    let list = http(&a, "GET", "/user/agents", &[("Cookie", &cookie)], None);
+    assert_eq!(list.status, 200);
+    assert!(list.body.contains(&secret));
+    assert!(list.body.contains("not seen yet"));
+
+    // The generated secret works on the API and mints a public id.
+    let st = http(&a, "GET", "/api/state", &[("X-Agent-ID", &secret)], None);
+    assert_eq!(st.status, 200);
+    let agent_id = body_json(&st)["agent_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        http(
+            &a,
+            "POST",
+            "/api/state",
+            &[
+                ("X-Agent-ID", &secret),
+                ("Content-Type", "application/json")
+            ],
+            Some(r#"{"summary":"kept"}"#),
+        )
+        .status,
+        200
+    );
+    assert_eq!(post_json(&a, r#"{"content":"hello"}"#, &secret).status, 201);
+
+    // Confirmation page, then the delete itself.
+    let confirm = http(
+        &a,
+        "GET",
+        &format!("/user/agents/delete?id={id}"),
+        &[("Cookie", &cookie)],
+        None,
+    );
+    assert_eq!(confirm.status, 200);
+    assert!(confirm.body.contains(&secret));
+    let id_field = id.to_string();
+    let del = form_post(
+        &a,
+        "/user/agents/delete",
+        &[("id", id_field.as_str())],
+        Some(&cookie),
+    );
+    assert_eq!(del.status, 303);
+
+    // Access is revoked...
+    assert_eq!(
+        http(&a, "GET", "/api/state", &[("X-Agent-ID", &secret)], None).status,
+        403
+    );
+    // ...but the post, the public identity, and the private state survive.
+    let feed = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", SECRET_A)],
+        None,
+    );
+    assert!(
+        msgs(&feed)
+            .iter()
+            .any(|m| m["agent_id"].as_str() == Some(agent_id.as_str()))
+    );
+    let identities: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agents WHERE agent_id = ?1",
+            [&agent_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(identities, 1);
+    let summaries: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_state WHERE agent_hash = ?1",
+            [hash_agent_secret(&secret)],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(summaries, 1);
+}
+
+#[test]
+fn admin_paste_validates_canonicalizes_and_is_idempotent() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let cookie = root_login(&s);
+
+    // Garbage is a 400 page, not a 500 or a silent add.
+    let bad = form_post(&a, "/user/agents", &[("secret", "nope")], Some(&cookie));
+    assert_eq!(bad.status, 400);
+    assert!(bad.body.contains("64 hex chars"));
+    // Neither pasting nor generating is a 400 too.
+    let empty = form_post(&a, "/user/agents", &[], Some(&cookie));
+    assert_eq!(empty.status, 400);
+    assert!(empty.body.contains("tick generate"));
+
+    // An uppercase paste is stored canonically as lowercase and works.
+    let upper = dyn_secret(0xab).to_uppercase();
+    let ok = form_post(
+        &a,
+        "/user/agents",
+        &[("secret", upper.as_str())],
+        Some(&cookie),
+    );
+    assert_eq!(ok.status, 303);
+    let conn = rusqlite::Connection::open(&s.db_path).unwrap();
+    let stored: String = conn
+        .query_row(
+            "SELECT secret FROM allowed_agents WHERE agent_hash = ?1",
+            [hash_agent_secret(&upper)],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, dyn_secret(0xab));
+
+    // Re-adding the same secret updates in place, it does not duplicate.
+    let again = form_post(
+        &a,
+        "/user/agents",
+        &[("secret", upper.as_str())],
+        Some(&cookie),
+    );
+    assert_eq!(again.status, 303);
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM allowed_agents WHERE agent_hash = ?1",
+            [hash_agent_secret(&upper)],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 1);
+
+    // Any case of the pasted secret is accepted by the API.
+    assert_eq!(
+        http(&a, "GET", "/api/state", &[("X-Agent-ID", &upper)], None).status,
+        200
+    );
+}
+
+#[test]
+fn admin_allowlist_requires_login() {
+    let s = TestServer::start();
+    let a = s.addr();
+    let conn = rusqlite::Connection::open(&s.db_path).unwrap();
+    let before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM allowed_agents", [], |r| r.get(0))
+        .unwrap();
+
+    for path in ["/user/agents", "/user/agents/delete?id=1"] {
+        let r = http(&a, "GET", path, &[], None);
+        assert_eq!(r.status, 302, "{path}");
+        assert_eq!(location(&r).as_deref(), Some("/user/login"), "{path}");
+    }
+    let post = form_post(&a, "/user/agents", &[("generate", "1")], None);
+    assert_eq!(post.status, 302);
+    assert_eq!(location(&post).as_deref(), Some("/user/login"));
+
+    let after: i64 = conn
+        .query_row("SELECT COUNT(*) FROM allowed_agents", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(before, after);
 }

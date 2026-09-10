@@ -25,6 +25,19 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
 
+# Put a secret on the allowlist directly. The admin HTTP flow has its own
+# checks further down; here the agents just need to be allowed to talk.
+seed_allow() { # $1 secret file
+  python3 - "$DB" "$(cat "$1")" <<'PY'
+import sqlite3, sys, hashlib
+db, secret = sys.argv[1], sys.argv[2].strip().lower()
+h = hashlib.sha256(secret.encode()).hexdigest()
+c = sqlite3.connect(db)
+c.execute("INSERT OR IGNORE INTO allowed_agents(agent_hash,secret,created_at) VALUES(?,?,0)", (h, secret))
+c.commit()
+PY
+}
+
 cleanup() {
   if [ -n "$SRV" ] && kill -0 "$SRV" 2>/dev/null; then
     if grep -q genbb /proc/$SRV/cmdline 2>/dev/null; then
@@ -62,11 +75,16 @@ ln -s "$REPO_DIR/docs" "$WORK/docs"
 SRV=$!
 
 for _ in $(seq 1 20); do
-  if timeout 3 curl -s -o /dev/null "$BASE/api/messages" 2>/dev/null; then break; fi
+  if timeout 3 curl -s -o /dev/null "$BASE/" 2>/dev/null; then break; fi
   sleep 0.3
 done
-timeout 5 curl -s -o /dev/null "$BASE/api/messages" || { echo "server did not start"; cat "$LOG"; exit 1; }
+timeout 5 curl -s -o /dev/null "$BASE/" || { echo "server did not start"; cat "$LOG"; exit 1; }
 echo "server up (pid $SRV)"
+
+# The API is invite-only (ADR-0015): allow the agents before they talk.
+seed_allow "$A_SEC"
+seed_allow "$B_SEC"
+seed_allow "$C_SEC"
 
 # rules endpoint serves the prompt; home page points agents at /rules
 RULES=$(timeout 10 curl -s "$BASE/rules")
@@ -120,13 +138,13 @@ post() { # $1 content, $2 parent_id(optional), $3 secret-file, $4 title(top-leve
 }
 
 # ---- ALICE session start: read the room ----
-HEAD_A=$(timeout 10 curl -s "$BASE/api/head")
+HEAD_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/head")
 echo "$HEAD_A" | jq -e '.latest_id == 0 and .messages == 0 and .agents == 0' >/dev/null && ok "head reports empty board" || bad "head wrong on empty board"
-FEED_A=$(timeout 10 curl -s "$BASE/api/messages?limit=50")
-OWN_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages")
+FEED_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?limit=50")
+OWN_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/session")
 STATE_A=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/state")
 echo "$FEED_A" | jq -e '.messages == []' >/dev/null && ok "alice sees empty feed" || bad "alice feed not empty"
-echo "$OWN_A" | jq -e '.messages == []' >/dev/null && ok "alice has no own posts yet" || bad "alice own posts wrong"
+echo "$OWN_A" | jq -e '.my_messages == []' >/dev/null && ok "alice has no own posts yet" || bad "alice own posts wrong"
 echo "$STATE_A" | jq -e '.summary == ""' >/dev/null && ok "alice state empty" || bad "alice state not empty"
 ALICE_AGENT=$(echo "$STATE_A" | jq -r '.agent_id')
 echo "$ALICE_AGENT" | grep -Eq '^[0-9a-f]{12}$' && ok "state returns alice's 12-hex agent_id" || bad "state missing alice agent_id"
@@ -137,7 +155,7 @@ TOP_ID=$(echo "$TOP" | jq -r '.id')
 [ -n "$TOP_ID" ] && [ "$TOP_ID" != "null" ] && ok "alice top-level post id=$TOP_ID" || { bad "alice post failed: $TOP"; exit 1; }
 
 # ---- BOB session start: read the room, then reply ----
-timeout 10 curl -s "$BASE/api/messages?limit=50" >/dev/null
+timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?limit=50" >/dev/null
 REPLY=$(post 'hi alice' "$TOP_ID" "$B_SEC")
 REPLY_ID=$(echo "$REPLY" | jq -r '.id')
 [ -n "$REPLY_ID" ] && [ "$REPLY_ID" != "null" ] && ok "bob reply id=$REPLY_ID parent=$TOP_ID" || { bad "bob reply failed: $REPLY"; exit 1; }
@@ -148,24 +166,24 @@ NEST_ID=$(echo "$NEST" | jq -r '.id')
 [ -n "$NEST_ID" ] && [ "$NEST_ID" != "null" ] && ok "alice nested reply id=$NEST_ID" || { bad "alice nested reply failed: $NEST"; exit 1; }
 
 # ---- assertions ----
-FEED=$(timeout 10 curl -s "$BASE/api/messages")
+FEED=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages")
 echo "$FEED" | jq -e '.messages | length == 3' >/dev/null && ok "feed has 3 messages" || bad "feed count wrong"
 echo "$FEED" | jq -e '[.messages[] | .agent_id | type=="string"] | all' >/dev/null && ok "all posts are agent posts" || bad "post missing agent_id"
 echo "$FEED" | jq -e '[.messages[] | has("agent")] | any' >/dev/null && bad "feed carries an agent field" || ok "feed has no agent field"
 
-HEAD2=$(timeout 10 curl -s "$BASE/api/head")
+HEAD2=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/head")
 echo "$HEAD2" | jq -e '.latest_id == 3 and .messages == 3 and .agents == 2' >/dev/null && ok "head reflects the board state" || bad "head wrong after posts"
 
-EX=$(timeout 10 curl -s "$BASE/api/messages?excerpt=4")
+EX=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?excerpt=4")
 echo "$EX" | jq -e '[.messages[] | (.content | length) <= 5] | all' >/dev/null && ok "excerpt trims feed content" || bad "excerpt did not trim content"
 echo "$EX" | jq -e '[.messages[] | .truncated == true] | all' >/dev/null && ok "excerpt marks truncated posts" || bad "excerpt missing truncated flag"
 
-OWN_ALICE=$(timeout 10 curl -s "$BASE/api/messages?agent_id=$ALICE_AGENT")
+OWN_ALICE=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?agent_id=$ALICE_AGENT")
 echo "$OWN_ALICE" | jq -e '.messages | length == 2' >/dev/null && ok "agent_id filter sees alice's 2 posts" || bad "agent_id filter wrong"
 
-MENT=$(timeout 10 curl -s "$BASE/api/messages?mentions=$ALICE_AGENT")
+MENT=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?mentions=$ALICE_AGENT")
 echo "$MENT" | jq -e '.messages | length == 3' >/dev/null && ok "mentions sees all posts in alice's thread" || bad "mentions filter wrong"
-MENT_UNKNOWN=$(timeout 10 curl -s "$BASE/api/messages?mentions=deadbeefdead")
+MENT_UNKNOWN=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages?mentions=deadbeefdead")
 echo "$MENT_UNKNOWN" | jq -e '.messages == []' >/dev/null && ok "mentions unknown agent is empty" || bad "mentions unknown agent not empty"
 
 SESS=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/session")
@@ -173,7 +191,7 @@ echo "$SESS" | jq -e '.agent_id == "'$ALICE_AGENT'" and (.my_messages | length =
 echo "$SESS" | jq -e '.latest_id == 3 and .messages == 3' >/dev/null && ok "session reports the board head" || bad "session head wrong"
 echo "$SESS" | jq -e '[.agents[] | .agent_id] | length == 2' >/dev/null && ok "session lists the agents" || bad "session agents wrong"
 
-THREAD=$(timeout 10 curl -s "$BASE/api/thread?root=$TOP_ID")
+THREAD=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/thread?root=$TOP_ID")
 T_FILTER=".root_id == $TOP_ID and (.messages | length == 3)"
 echo "$THREAD" | jq -e "$T_FILTER" >/dev/null && ok "thread root returns 3 messages" || bad "thread api wrong"
 
@@ -194,17 +212,17 @@ echo "$HOME2" | grep -q "Recent posts" && ok "home has recent posts block" || ba
 echo "$HOME2" | grep -q ">hello board thread</a>" && ok "recent posts link shows the thread title" || bad "recent posts missing thread title link"
 echo "$HOME2" | grep -q ">thread</a>" && bad "literal 'thread' link present" || ok "no literal 'thread' link"
 
-OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/messages")
-echo "$OWN_B" | jq -e '.messages | length == 1' >/dev/null && ok "bob fetches only his own posts" || bad "bob own-posts filter wrong"
+OWN_B=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$B_SEC")" "$BASE/api/session")
+echo "$OWN_B" | jq -e '.my_messages | length == 1' >/dev/null && ok "bob's session sees only his own post" || bad "bob own-posts wrong"
 
-AGENTS=$(timeout 10 curl -s "$BASE/api/agents")
+AGENTS=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/agents")
 echo "$AGENTS" | jq -e '[.agents[] | .agent_id] | length == 2' >/dev/null && ok "alice and bob listed in /api/agents" || bad "agents listing wrong"
 echo "$AGENTS" | jq -e '[.agents[] | (.agent_id | type=="string") and (.agent_id | length==12)] | all' >/dev/null && ok "agents carry 12-hex agent_id" || bad "agents missing 12-hex agent_id"
 echo "$AGENTS" | jq -e '[.agents[] | .agent_id] | length == (. | unique | length)' >/dev/null && ok "agent_ids are unique" || bad "agent_ids collide"
 echo "$AGENTS" | jq -e '[.agents[] | has("author")] | any' >/dev/null && bad "agents carry a name field" || ok "agents have no name field"
 
 # feed carries each poster's agent_id and no name field
-FEED2=$(timeout 10 curl -s "$BASE/api/messages")
+FEED2=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages")
 echo "$FEED2" | jq -e '[.messages[] | .agent_id | type=="string" and length==12] | all' >/dev/null && ok "posts carry 12-hex agent_id" || bad "posts missing agent_id"
 echo "$FEED2" | jq -e '[.messages[] | has("author")] | any' >/dev/null && bad "feed carries a name field" || ok "feed has no name field"
 
@@ -234,8 +252,10 @@ RL=$(timeout 10 curl -s -i -X POST -H 'Content-Type: application/json' \
 echo "$RL" | grep -q "HTTP/1.1 429" && ok "rate limit returns 429" || bad "rate limit not 429"
 echo "$RL" | grep -qi "Retry-After:" && ok "rate limit has Retry-After" || bad "rate limit missing Retry-After"
 
-# raw secret never stored; stored hash is 64 hex
-grep -q "$(cat "$A_SEC")" "$DB" 2>/dev/null && bad "raw alice secret found in db" || ok "raw secret absent from db"
+# identity tables store only the hash; the allowlist is the deliberate vault
+A_SECRET=$(cat "$A_SEC")
+VAULT=$(python3 -c "import sqlite3;print(sqlite3.connect('$DB').execute('SELECT COUNT(*) FROM allowed_agents WHERE secret=?',('$A_SECRET',)).fetchone()[0])")
+[ "$VAULT" = "1" ] && ok "allowlist vault holds the raw secret (ADR-0015)" || bad "allowlist vault missing the raw secret"
 HASHES=$(python3 -c "import sqlite3; print('\n'.join(r[0] for r in sqlite3.connect('$DB').execute('SELECT agent_hash FROM messages WHERE agent_hash IS NOT NULL')))")
 ALLHEX=1
 for h in $HASHES; do
@@ -246,6 +266,7 @@ for h in $HASHES; do
   [ "${#h}" -ne 64 ] && ALLHEX=0
 done
 [ "$ALLHEX" = 1 ] && ok "all agent hashes are 64-char hex" || bad "agent hash not 64-hex"
+echo "$HASHES" | grep -qx "$A_SECRET" && bad "messages stored the raw secret" || ok "message rows key on the hash, not the secret"
 
 # malformed X-Agent-ID secrets are rejected with 400 on every endpoint
 BADSEC=shortsecret
@@ -259,6 +280,18 @@ CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Typ
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
   -H "X-Agent-ID: $BADSEC" -d '{"summary":"x"}' "$BASE/api/state")
 [ "$CODE" = 400 ] && ok "state post rejects malformed secret (400)" || bad "state post accepted malformed secret ($CODE)"
+
+# a well-formed but unlisted secret is 403, distinct from 401 and 400
+Z_SEC=$(printf '0f%.0s' $(seq 1 32))
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $Z_SEC" "$BASE/api/messages")
+[ "$CODE" = 403 ] && ok "unlisted secret forbidden on feed (403)" || bad "unlisted feed secret not 403 ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -H "X-Agent-ID: $Z_SEC" "$BASE/api/head")
+[ "$CODE" = 403 ] && ok "unlisted secret forbidden on head (403)" || bad "unlisted head secret not 403 ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -H "X-Agent-ID: $Z_SEC" -d "$(jq -n --arg t x --arg c y '{title:$t,content:$c}')" "$BASE/api/messages")
+[ "$CODE" = 403 ] && ok "unlisted secret forbidden on post (403)" || bad "unlisted post secret not 403 ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "$BASE/api/messages")
+[ "$CODE" = 401 ] && ok "headerless feed still 401" || bad "headerless feed not 401 ($CODE)"
 
 # ---- ROOT user session: password-file bootstrap -> DB record ----
 ROOT_PW=root-secret-pw
@@ -294,6 +327,25 @@ echo "$LOGIN" | grep -qi "SameSite=Lax" && ok "session cookie is SameSite=Lax" |
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" "$BASE/user/login")
 [ "$CODE" = 302 ] && ok "signed-in user is bounced off the login page" || bad "login page did not redirect signed-in user ($CODE)"
 
+# ---- /user/agents: the allowlist page (ADR-0015) ----
+AGPAGE=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/agents")
+echo "$AGPAGE" | grep -q "Allowed agents" && ok "allowlist page renders for root" || bad "allowlist page missing heading"
+echo "$AGPAGE" | grep -q "$(cat "$A_SEC")" && ok "allowlist page shows a cleartext secret" || bad "allowlist page missing a secret"
+echo "$AGPAGE" | grep -q "/user/agents/delete?id=" && ok "allowlist page has delete links" || bad "allowlist page missing delete links"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "$BASE/user/agents")
+[ "$CODE" = 302 ] && ok "allowlist page requires login (302)" || bad "anonymous allowlist not redirected ($CODE)"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X POST \
+  -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "generate=1" "$BASE/user/agents")
+[ "$CODE" = 303 ] && ok "root can add an allowlist entry" || bad "allowlist add not 303 ($CODE)"
+AGPAGE2=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/agents")
+NEW_ID=$(echo "$AGPAGE2" | grep -o '/user/agents/delete?id=[0-9]*' | tail -1 | sed 's/.*=//')
+[ -n "$NEW_ID" ] && ok "new entry has a delete link (id=$NEW_ID)" || bad "no delete link after add"
+CONF=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/agents/delete?id=$NEW_ID")
+echo "$CONF" | grep -q "Delete allowlist entry" && ok "delete confirmation page renders" || bad "delete confirmation missing"
+CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X POST \
+  -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "id=$NEW_ID" "$BASE/user/agents/delete")
+[ "$CODE" = 303 ] && ok "root can delete an allowlist entry" || bad "allowlist delete not 303 ($CODE)"
+
 POSTPAGE=$(timeout 10 curl -s -b "$WORK/cookies" "$BASE/user/post")
 echo "$POSTPAGE" | grep -q "Create a new thread" && ok "compose page renders for the root user" || bad "compose page missing form"
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "$BASE/user/post")
@@ -305,7 +357,7 @@ echo "$THREAD" | grep -q "HTTP/1.1 303" && ok "root new thread redirects (303)" 
 RID=$(echo "$THREAD" | grep -i '^Location:' | tr -d '\r' | sed 's#.*/t/##;s/#.*//')
 [ -n "$RID" ] && ok "root thread id=$RID" || bad "root thread id missing"
 
-FEED3=$(timeout 10 curl -s "$BASE/api/messages")
+FEED3=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/messages")
 echo "$FEED3" | jq -e '[.messages[] | select(.agent_id=="000000000000") | .author_kind=="root"] | any' >/dev/null && ok "root post carries the all-zeros id and author_kind root" || bad "root post author wrong"
 echo "$FEED3" | jq -e '[.messages[] | select(.agent_id!="000000000000") | .author_kind=="agent"] | all' >/dev/null && ok "agent posts carry author_kind agent" || bad "agent posts author_kind wrong"
 
@@ -330,10 +382,10 @@ echo "$HOME3" | grep -q "/user/logout" && ok "home shows logout for the root use
 HOME4=$(timeout 10 curl -s "$BASE/")
 echo "$HOME4" | grep -q "/user/post" && bad "anonymous home shows session links" || ok "anonymous home has no session links"
 
-AG3=$(timeout 10 curl -s "$BASE/api/agents")
+AG3=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/agents")
 echo "$AG3" | jq -e '[.agents[] | select(.kind=="root")] | length == 1 and .[0].agent_id=="000000000000"' >/dev/null && ok "agents listing marks root by kind" || bad "agents listing root kind wrong"
 echo "$AG3" | jq -e '[.agents[] | has("kind")] | all' >/dev/null && ok "every agents entry carries a kind" || bad "agents entry missing kind"
-HEAD3=$(timeout 10 curl -s "$BASE/api/head")
+HEAD3=$(timeout 10 curl -s -H "X-Agent-ID: $(cat "$A_SEC")" "$BASE/api/head")
 echo "$HEAD3" | jq -e '.agents >= 3' >/dev/null && ok "head counts root among agents" || bad "head agents count wrong: $(echo "$HEAD3")"
 
 CODE=$(timeout 10 curl -s -o /dev/null -w '%{http_code}' -b "$WORK/cookies" -X POST -H 'Content-Type: application/json' \

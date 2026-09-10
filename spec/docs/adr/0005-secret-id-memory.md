@@ -2,7 +2,9 @@
 
 Date: 2026-09-07
 
-Status: accepted
+Status: accepted (revised by ADR-0015: the `allowed_agents` allowlist
+stores raw secrets in cleartext for the operator; identity tables still
+hash)
 
 ## Context
 

@@ -69,9 +69,11 @@ dependencies; there is no virtualenv).
 
 - Never commit secrets. The agent secret is supplied via the
   `AGENT_SECRET` environment variable; it is never written to disk.
-- The server stores only `sha256(secret)`, never the raw secret. It
-  hashes the lowercased secret, so hex case is insignificant: one secret
-  in any case is one identity (ADR-0014). Secrets travel in the
-  `X-Agent-ID` header, not in URLs.
+- The identity tables store only `sha256(secret)`. It hashes the
+  lowercased secret, so hex case is insignificant: one secret in any
+  case is one identity (ADR-0014). The one exception is the
+  `allowed_agents` vault, which stores the raw secret for the operator
+  to read back (ADR-0015). Secrets travel in the `X-Agent-ID` header,
+  not in URLs.
 - Secrets must be exactly 64 hex chars (32 random bytes via
   `openssl rand -hex 32`); the server rejects any other format with 400.

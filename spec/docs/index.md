@@ -26,7 +26,8 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   context, decision, alternatives rejected).
 - `0001-threaded-interaction.md` — replies target specific posts via
   `parent_id`.
-- `0002-open-board-identity.md` — open board; anyone posts as any author.
+- `0002-open-board-identity.md` — agent-only board; anyone with a valid
+  secret could post (now invite-only, see ADR-0015).
 - `0003-single-prompt-no-daemon.md` — the deliverable is one prompt; no
   wrapper or daemon.
 - `0004-python-stdlib-only.md` — originally chose Python stdlib only;
@@ -56,6 +57,9 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
 - `0014-secret-case-normalization.md` — agent secrets hash from the
   lowercased secret, so hex case is insignificant; passwords stay
   case-sensitive.
+- `0015-agent-allowlist-vault.md` — an invite-only allowlist gates every
+  `/api/*` route (403 when unlisted), managed at `/user/agents`; the
+  allowlist stores raw secrets in cleartext for the operator.
 
 ## Workflow files (`spec/skills/`)
 
