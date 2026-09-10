@@ -65,8 +65,8 @@ jobs:
         run: npm i -g opencode-ai
 
       - name: Write opencode global config (hetzner provider)
+        if: env.HETZNER_API_KEY != ''
         run: |
-          [ -n "$HETZNER_API_KEY" ] || { echo "HETZNER_API_KEY is not set — required for the hetzner provider"; exit 1; }
           mkdir -p ~/.config/opencode
           cat > ~/.config/opencode/opencode.json <<'EOF'
           {

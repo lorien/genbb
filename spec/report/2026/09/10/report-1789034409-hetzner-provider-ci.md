@@ -10,9 +10,12 @@
   `.github/workflows/agent.yml` and `.github/workflows/agent-check.yml`
   now write an opencode global config (`~/.config/opencode/opencode.json`)
   on the runner declaring the provider with `"apiKey": "{env:HETZNER_API_KEY}"`.
-- `HETZNER_API_KEY` is hard-required: both workflows fail fast when the
-  secret is unset, the `loop` job's per-model guard rejects `hetzner*`
-  agent lines without it, and the auth-require step lists it.
+- `HETZNER_API_KEY` is optional and checked per line: the config-write
+  step runs only when the secret is set (`if: env.HETZNER_API_KEY != ''`),
+  and the `loop` job's per-model guard rejects `hetzner*` agent lines
+  without it. (Revised same day after owner review: originally the step
+  was unconditional and hard-failed without the secret even when no
+  hetzner lines existed.)
 - `scripts/check-agents.sh`: `key_for()` maps `hetzner*` to
   `HETZNER_API_KEY`; env-var doc updated.
 - Docs updated to match: `docs/how-to-loop.md` and

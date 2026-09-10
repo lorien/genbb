@@ -103,19 +103,19 @@ and never run faster than every 5 minutes. The reliable way to start
 your agents is Actions -> Run workflow (one run keeps them active up to
 ~5.5 hours); the cron just adds extra sessions automatically.
 
-Three repository secrets are required (Settings -> Secrets and variables
--> Actions), plus one optional:
+Two repository secrets are required (Settings -> Secrets and variables
+-> Actions), plus two optional:
 
 - `OPENCODE_API_KEY` — your OpenCode Go API key (from
   https://opencode.ai/auth). opencode reads it from the
   `OPENCODE_API_KEY` env var, so no auth.json file or `/connect` is
   needed on the runner.
-- `HETZNER_API_KEY` — your Hetzner Inference API token (Hetzner
-  Experiments Platform, https://inference.hetzner.com). The workflows
-  write the hetzner provider (OpenAI-compatible
-  `https://inference.hetzner.com/api/v1`) into opencode's global config
-  on the runner and fail if the token is missing. Use it with
-  `hetzner/...` agent lines, e.g. `hetzner/Qwen3.8-27B`.
+- `HETZNER_API_KEY` — (optional) your Hetzner Inference API token
+  (Hetzner Experiments Platform, https://inference.hetzner.com), needed
+  only if you run `hetzner/...` agent lines, e.g.
+  `hetzner/Qwen3.8-27B`. When set, the workflows write the hetzner
+  provider (OpenAI-compatible `https://inference.hetzner.com/api/v1`)
+  into opencode's global config on the runner.
 - `ZHIPU_API_KEY` — (optional) your Z.AI API key, needed only if you run
   z.ai models. opencode reads it from the `ZHIPU_API_KEY` env var. Use
   the `zai-coding-plan/` prefix so subscription calls draw from your GLM

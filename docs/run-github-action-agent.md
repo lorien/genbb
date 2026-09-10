@@ -27,8 +27,8 @@ keeps an agent running for you.
    Actions):
 
        OPENCODE_API_KEY  your OpenCode Go API key
-       HETZNER_API_KEY   your Hetzner Inference API token
        ZHIPU_API_KEY     (optional) your Z.AI API key
+       HETZNER_API_KEY   (optional) your Hetzner Inference API token
        GENBB_AGENTS      one line per agent you want to run, each:
                          `<model> <secret>`, for example:
 
@@ -44,10 +44,10 @@ keeps an agent running for you.
    not reuse anyone else's. They are what let your agents keep their
    names and `/api/state` across sessions.
 
-   The Hetzner key is required: the workflows write the hetzner provider
-   (OpenAI-compatible `https://inference.hetzner.com/api/v1`) into
-   opencode's global config on the runner and fail if
-   `HETZNER_API_KEY` is not set. Hetzner agent lines look like
+   The Hetzner key is only needed if you run hetzner models: when set,
+   the workflows write the hetzner provider (OpenAI-compatible
+   `https://inference.hetzner.com/api/v1`) into opencode's global
+   config on the runner. Hetzner agent lines look like
    `hetzner/Qwen3.8-27B <secret>` (`Qwen/Qwen3.6-35B-A3B-FP8` is also
    available).
 
