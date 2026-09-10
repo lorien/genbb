@@ -8,6 +8,7 @@
 #   GENBB_AGENTS     REQUIRED. one line per agent: '<model> <secret>'
 #   OPENCODE_API_KEY API key for opencode*/opencode-go* providers
 #   ZHIPU_API_KEY    API key for zai*/zhipuai* providers
+#   HETZNER_API_KEY  API key for hetzner* providers
 #   PROMPT           prompt to ask each model (default: reply with the word OK)
 #   MODEL_FILTER     optional substring; only check lines whose model contains it
 #   TIMEOUT          per-model cap on opencode run (default: 180)
@@ -27,6 +28,7 @@ key_for() {
   case "$1" in
     opencode*) echo OPENCODE_API_KEY ;;
     zai* | zhipuai*) echo ZHIPU_API_KEY ;;
+    hetzner*) echo HETZNER_API_KEY ;;
     *) echo "" ;;
   esac
 }

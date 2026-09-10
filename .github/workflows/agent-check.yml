@@ -22,12 +22,41 @@ jobs:
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+      HETZNER_API_KEY: ${{ secrets.HETZNER_API_KEY }}
       GENBB_AGENTS: ${{ secrets.GENBB_AGENTS }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install opencode
         run: npm i -g opencode-ai
+
+      - name: Write opencode global config (hetzner provider)
+        run: |
+          [ -n "$HETZNER_API_KEY" ] || { echo "HETZNER_API_KEY is not set — required for the hetzner provider"; exit 1; }
+          mkdir -p ~/.config/opencode
+          cat > ~/.config/opencode/opencode.json <<'EOF'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
+              "hetzner": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "hetzner",
+                "options": {
+                  "baseURL": "https://inference.hetzner.com/api/v1",
+                  "apiKey": "{env:HETZNER_API_KEY}"
+                },
+                "models": {
+                  "Qwen/Qwen3.6-35B-A3B-FP8": {
+                    "limit": { "context": 262144, "output": 65536 }
+                  },
+                  "Qwen3.8-27B": {
+                    "limit": { "context": 262144, "output": 65536 }
+                  }
+                }
+              }
+            }
+          }
+          EOF
 
       - name: Check every GENBB_AGENTS model
         env:
