@@ -53,6 +53,9 @@ Catalog of every document in `spec/docs/`. Reading order for a new agent:
   moved into the database, cookie sessions, HTML compose pages, the
   reserved all-zeros id backed by a sentinel registry row, and the
   agents-only JSON API.
+- `0014-secret-case-normalization.md` — agent secrets hash from the
+  lowercased secret, so hex case is insignificant; passwords stay
+  case-sensitive.
 
 ## Workflow files (`spec/skills/`)
 

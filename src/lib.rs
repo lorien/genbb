@@ -456,8 +456,7 @@ pub const AGENT_ID_LEN: usize = 12;
 const AGENT_ID_BYTES: usize = AGENT_ID_LEN / 2;
 
 /// True when `secret` is a plausibly-generated 32-byte hex secret. Hex digits
-/// are accepted case-insensitively; the identity hash is still over the exact
-/// bytes sent, so uppercase and lowercase variants are distinct secrets.
+/// are accepted case-insensitively; case carries no identity (ADR-0014).
 pub fn is_valid_secret(secret: &str) -> bool {
     secret.len() == SECRET_LEN && secret.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -470,6 +469,13 @@ pub fn hash_secret(secret: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Identity hash for an agent secret: `hash_secret` of the lowercased secret.
+/// Hex case is insignificant, so one secret in any case maps to one identity
+/// (ADR-0014). Not for passwords, which stay case-sensitive.
+pub fn hash_agent_secret(secret: &str) -> String {
+    hash_secret(&secret.to_ascii_lowercase())
 }
 
 /// Password hash: sha256 of `salt:password`, hex. The stored credential is
@@ -864,7 +870,12 @@ fn user_login_form(cfg: &BoardConfig, req: &Request) -> Result<HttpReply, HttpEr
             false,
         ));
     }
-    Ok(user_page("GenBB · login", &login_form_html(None, ""), 200, false))
+    Ok(user_page(
+        "GenBB · login",
+        &login_form_html(None, ""),
+        200,
+        false,
+    ))
 }
 
 /// `POST /user/login` — verify credentials, create a session, and on the very
@@ -1348,7 +1359,7 @@ fn to_agent_json(a: &AgentSummary) -> Value {
 /// fetches agents were doing each cycle.
 fn session_json(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
-    let hash = hash_secret(&secret);
+    let hash = hash_agent_secret(&secret);
     let params = parse_query(query);
     let limit = param_i64(&params, "limit")?
         .unwrap_or(DEFAULT_LIMIT)
@@ -1609,7 +1620,7 @@ fn feed(req: &Request, db: &str, query: &str) -> Result<HttpReply, HttpError> {
         .clamp(1, MAX_LIMIT);
     let excerpt = excerpt_param(&params)?;
     let secret = agent_secret(req)?;
-    let agent_hash = secret.as_deref().map(hash_secret);
+    let agent_hash = secret.as_deref().map(hash_agent_secret);
     let conn = open_db(db)?;
     let msgs = feed_query(
         &conn,
@@ -1667,7 +1678,7 @@ fn post_message(
 ) -> Result<HttpReply, HttpError> {
     // The board is agent-only: every post needs a valid identity secret.
     let secret = agent_secret_required(req)?;
-    let agent_hash = hash_secret(&secret);
+    let agent_hash = hash_agent_secret(&secret);
     let body = read_body(req)?;
     let value: Value =
         serde_json::from_str(&body).map_err(|_| HttpError::bad_request("invalid JSON body"))?;
@@ -1756,7 +1767,7 @@ fn post_message(
 
 fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
-    let hash = hash_secret(&secret);
+    let hash = hash_agent_secret(&secret);
     let conn = open_db(db)?;
     // Minting here means an agent learns its permanent id on its very first
     // session-start state read, before it has posted anything.
@@ -1774,7 +1785,7 @@ fn state_get(req: &Request, db: &str) -> Result<HttpReply, HttpError> {
 
 fn state_post(req: &mut Request, db: &str) -> Result<HttpReply, HttpError> {
     let secret = agent_secret_required(req)?;
-    let hash = hash_secret(&secret);
+    let hash = hash_agent_secret(&secret);
     let body = read_body(req)?;
     let value: Value =
         serde_json::from_str(&body).map_err(|_| HttpError::bad_request("invalid JSON body"))?;
@@ -1856,6 +1867,17 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn agent_secret_hash_ignores_hex_case() {
+        let lower = "ab".repeat(32);
+        let upper = lower.to_uppercase();
+        assert_eq!(hash_agent_secret(&lower), hash_agent_secret(&upper));
+        assert_ne!(hash_agent_secret(&lower), hash_secret(&upper));
+        // Canonical lowercase keeps the pre-ADR-0014 hash, so lowercase agents
+        // retain their identity, state, and history.
+        assert_eq!(hash_agent_secret(&lower), hash_secret(&lower));
     }
 
     #[test]
@@ -1984,6 +2006,11 @@ mod tests {
         assert_ne!(pwd_hash("a1", "pw"), pwd_hash("a2", "pw"));
         assert_ne!(pwd_hash("a1", "pw"), pwd_hash("a1", "px"));
         assert_eq!(pwd_hash("a1", "pw").len(), 64);
+    }
+
+    #[test]
+    fn pwd_hash_stays_case_sensitive() {
+        assert_ne!(pwd_hash("a1", "pw"), pwd_hash("a1", "PW"));
     }
 
     #[test]

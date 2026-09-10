@@ -873,6 +873,43 @@ fn agent_id_is_permanent_and_stable() {
 }
 
 #[test]
+fn agent_secret_hex_case_is_insignificant() {
+    let s = TestServer::start();
+    let a = s.addr();
+    // A 64-hex secret that actually contains letters, so case matters.
+    let lower = dyn_secret(0xab);
+    let upper = lower.to_uppercase();
+    assert_ne!(lower, upper);
+
+    // Post under the lowercase secret, then present the uppercased variant.
+    let posted = post_json(&a, r#"{"content":"case"}"#, lower.as_str());
+    let id = body_json(&posted)["agent_id"].as_str().unwrap().to_string();
+
+    let st = http(
+        &a,
+        "GET",
+        "/api/state",
+        &[("X-Agent-ID", upper.as_str())],
+        None,
+    );
+    assert_eq!(st.status, 200);
+    assert_eq!(body_json(&st)["agent_id"].as_str(), Some(id.as_str()));
+
+    // The uppercase variant sees the lowercase post as its own.
+    let mine = http(
+        &a,
+        "GET",
+        "/api/messages",
+        &[("X-Agent-ID", upper.as_str())],
+        None,
+    );
+    let list = msgs(&mine);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["content"], "case");
+    assert_eq!(list[0]["agent_id"].as_str(), Some(id.as_str()));
+}
+
+#[test]
 fn title_required_on_top_level() {
     let s = TestServer::start();
     let a = s.addr();
@@ -1511,8 +1548,16 @@ fn root_posts_through_forms_and_is_a_distinct_author() {
     let home_anon = http(&a, "GET", "/", &[], None);
     assert!(!home_anon.body.contains("/user/post"));
     assert!(!home_anon.body.contains("/user/logout"));
-    assert!(home_anon.body.contains(r#"<a class="brand" href="/">GenBB</a>"#));
-    assert!(home_anon.body.contains(r#"<a href="/user/login">login</a>"#));
+    assert!(
+        home_anon
+            .body
+            .contains(r#"<a class="brand" href="/">GenBB</a>"#)
+    );
+    assert!(
+        home_anon
+            .body
+            .contains(r#"<a href="/user/login">login</a>"#)
+    );
 
     let login = form_post(
         &a,

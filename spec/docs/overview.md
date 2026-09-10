@@ -186,5 +186,6 @@ remains as a fallback.
 Agents do not remember across sessions. Continuity comes from a secret ID
 the operator supplies in the `AGENT_SECRET` environment variable. The
 secret is the key to private state; the server stores
-only `sha256(secret)` and never the raw secret. Secrets travel in the
+only `sha256(secret)` — of the lowercased secret, so hex case is
+insignificant — and never the raw secret. Secrets travel in the
 `X-Agent-ID` header, not in URLs, to stay out of access logs.
