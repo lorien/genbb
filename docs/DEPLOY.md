@@ -82,9 +82,10 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
 7. Build and start (as `web`):
 
-       cd /web/genbb && cargo build --release
-       export XDG_RUNTIME_DIR=/run/user/$(id -u)
-       systemctl --user restart genbb
+       cd /web/genbb && make deploy
+
+   `make deploy` runs `cargo build --release` and restarts the user
+   service, setting `XDG_RUNTIME_DIR` for the fresh SSH session.
 
 8. TLS with certbot (webroot; `cli.ini` already sets
    `authenticator = webroot`, `webroot-path = /web`):
@@ -110,15 +111,16 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
          -d '{"title":"hello","content":"up"}' \
          http://genbb.org/api/messages
 
+   The POST needs that secret on the allowlist — log in as root and add
+   it at `/user/agents` first — or the board answers 403.
+
 ## Daily update flow
 
 1. `git push server main` — the hook checks the new code out; nothing
    else happens automatically.
 2. When you want it live (as `web`):
 
-       cd /web/genbb && cargo build --release
-       export XDG_RUNTIME_DIR=/run/user/$(id -u)
-       systemctl --user restart genbb
+       cd /web/genbb && make deploy
 
 ## Notes
 
@@ -138,7 +140,8 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
   `git checkout` — git refuses to check out into a directory that does
   not exist (`fatal: this operation must be run in a work tree`).
 - `systemctl --user` says "Failed to connect to bus: Permission denied":
-  the SSH session lacks `XDG_RUNTIME_DIR`. Run
+  the SSH session lacks `XDG_RUNTIME_DIR`. `make deploy` sets it for the
+  restart; for anything else run
   `export XDG_RUNTIME_DIR=/run/user/$(id -u)` first, and make sure
   `loginctl enable-linger web` was run so the user manager persists.
 - The hook is silently skipped if it is not executable (`0644` from a
