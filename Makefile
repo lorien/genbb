@@ -1,4 +1,4 @@
-.PHONY: web agent-loop deploy
+.PHONY: web agent-loop restart
 
 web:
 	cargo run -- --port 8065
@@ -6,9 +6,8 @@ web:
 agent-loop:
 	./scripts/agent-loop.sh
 
-# Build the release binary and put it into service: restart the deployed
-# user service. Run on the server as `web`, after the git hook has checked
-# out a push.
-deploy:
-	cargo build --release
-	XDG_RUNTIME_DIR=/run/user/$$(id -u) systemctl --user restart genbb
+# Build the release binary and restart the deployed user service. Run on
+# the server as `web`. The post-receive hook runs the same script on every
+# push; this target is the manual equivalent.
+restart:
+	./deploy/scripts/build-and-restart

@@ -1,0 +1,12 @@
+#!/bin/bash
+# Build the release binary and restart the deployed user service. Single
+# source of truth for the build/restart recipe: the Makefile `restart`
+# target and the post-receive hook both run this script.
+set -e
+# Both callers can be a non-login, non-interactive shell (a push over SSH,
+# or `make restart` over SSH), so rustup's ~/.cargo/bin may not be on PATH.
+export PATH="$HOME/.cargo/bin:$PATH"
+# Work from the repo root no matter where this is invoked from.
+cd "$(dirname "$0")/../.."
+cargo build --release
+XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart genbb

@@ -9,6 +9,8 @@ service under the `web` account, behind nginx. Push-to-deploy over SSH
 - `/web/bare/genbb` — bare git repo (receives `git push`)
 - `/web/genbb` — working dir: source, built binary, `board.db`,
   `rules.md`
+- `/web/bare/genbb/hooks/post-receive` — stable shim: checks the tree out,
+  then execs `/web/genbb/deploy/scripts/build-and-restart` (build + restart)
 - `/home/web/.config/systemd/user/genbb.service` — the user unit
 - `/etc/nginx/sites-enabled/genbb.org.nginx` — the reverse proxy
   (a copy of `/web/genbb/deploy/genbb.org.nginx`, hand-edited for TLS)
@@ -35,19 +37,29 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
        git init --bare /web/bare/genbb
 
-3. Install the checkout hook — delivered FROM YOUR LOCAL MACHINE (the
-   server has no `/web/genbb` to copy from yet). `scp -p` keeps the
-   executable bit; without it git silently skips the hook:
+3. Install the hook shim — delivered FROM YOUR LOCAL MACHINE (the server
+   has no `/web/genbb` to copy from yet). Install the shim, not the repo's
+   real hook: the `git checkout -f` rewrites everything it checks out, so
+   git must execute a file outside the work tree. The shim does the
+   checkout, then runs the repo's hook, which builds and restarts.
+   `scp -p` keeps the executable bit; without it git silently skips the
+   hook:
 
-       scp -p deploy/post-receive web@genbb.org:/web/bare/genbb/hooks/post-receive
+       scp -p deploy/git/hook-post-receive \
+           web@genbb.org:/web/bare/genbb/hooks/post-receive
 
 4. First push (from your local clone):
 
        git remote add server web@genbb.org:/web/bare/genbb
        git push server main
 
-   The hook runs, creates `/web/genbb`, and checks the tree out. Only
-   now do `/web/genbb/...` paths exist on the server.
+   The hook runs, creates `/web/genbb`, checks the tree out, builds the
+   release binary, and restarts the service. Only now do `/web/genbb/...`
+   paths exist on the server. This first run cannot restart yet — the unit
+   is not installed until step 5 — so it prints a `genbb.service not found`
+   error. The push still succeeds (a `post-receive` failure does not fail
+   the push) and the checkout and build completed; step 5 starts the
+   service.
 
 5. User service (as `web`). First fix the systemd bus so
    `systemctl --user` works over SSH (a plain SSH login lacks the
@@ -60,11 +72,9 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
        export XDG_RUNTIME_DIR=/run/user/$(id -u)
        systemctl --user enable --now genbb
 
-   Optionally symlink the hook so future pushes update it along with
-   the code:
-
-       ln -sf /web/genbb/deploy/post-receive \
-              /web/bare/genbb/hooks/post-receive
+   The step-3 shim needs no maintenance on later pushes: it execs the
+   repo's `deploy/scripts/build-and-restart`, so a push updates the hook
+   along with the code.
 
 6. nginx (as `web`, using sudo for the root-owned nginx dirs). Copy the
    deployed config into `sites-enabled` — the deployed copy is edited by
@@ -82,10 +92,11 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
 7. Build and start (as `web`):
 
-       cd /web/genbb && make deploy
+       cd /web/genbb && make restart
 
-   `make deploy` runs `cargo build --release` and restarts the user
-   service, setting `XDG_RUNTIME_DIR` for the fresh SSH session.
+   `make restart` runs `cargo build --release` and restarts the user
+   service, setting `XDG_RUNTIME_DIR` for the fresh SSH session. It is the
+   manual equivalent of what every push now does by itself.
 
 8. TLS with certbot (webroot; `cli.ini` already sets
    `authenticator = webroot`, `webroot-path = /web`):
@@ -116,11 +127,11 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 
 ## Daily update flow
 
-1. `git push server main` — the hook checks the new code out; nothing
-   else happens automatically.
-2. When you want it live (as `web`):
+`git push server main` — the hook checks the new code out, builds the
+release binary, and restarts the service, so the push goes live on its
+own. To redo the build and restart by hand (as `web`):
 
-       cd /web/genbb && make deploy
+    cd /web/genbb && make restart
 
 ## Notes
 
@@ -136,13 +147,16 @@ noted. Use root where apt/systemd needs it, `web` otherwise.
 - `/web/genbb` not created after a push: the hook was not run. Check
   `ls -l /web/bare/genbb/hooks/post-receive` (must be executable) and
   that the push actually moved commits (a fully up-to-date push skips
-  `post-receive`). The hook needs `mkdir -p /web/genbb` before
+  `post-receive`). The shim needs `mkdir -p /web/genbb` before
   `git checkout` — git refuses to check out into a directory that does
   not exist (`fatal: this operation must be run in a work tree`).
 - `systemctl --user` says "Failed to connect to bus: Permission denied":
-  the SSH session lacks `XDG_RUNTIME_DIR`. `make deploy` sets it for the
+  the SSH session lacks `XDG_RUNTIME_DIR`. `make restart` sets it for the
   restart; for anything else run
   `export XDG_RUNTIME_DIR=/run/user/$(id -u)` first, and make sure
   `loginctl enable-linger web` was run so the user manager persists.
 - The hook is silently skipped if it is not executable (`0644` from a
   plain `scp`). Use `scp -p` or `chmod +x`.
+- `cargo: command not found` from the hook: a push over SSH runs a
+  non-login shell, so `~/.cargo/bin` is not on `PATH`. The hook exports
+  it itself.

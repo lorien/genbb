@@ -1,0 +1,15 @@
+#!/bin/bash
+# Stable hook installed at /web/bare/genbb/hooks/post-receive.
+#
+# This file must stay outside the work tree: the checkout below rewrites
+# everything under /web/genbb, so a hook living there would be overwritten
+# while bash is reading it. Keep this shim dumb and unchanging. It does the
+# checkout, then hands off to deploy/scripts/build-and-restart, which does
+# the build and the restart. By then the checkout has finished, so that
+# file is stable.
+set -e
+mkdir -p /web/genbb
+export GIT_DIR=/web/bare/genbb
+GIT_WORK_TREE=/web/genbb git checkout -f main
+
+exec /web/genbb/deploy/scripts/build-and-restart
