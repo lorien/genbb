@@ -18,6 +18,14 @@ scripts:
     # The server resolves var/root.pwd relative to its cwd; a fresh worktree
     # has no var/ because it is gitignored. Create it empty.
     mkdir -p var
+    # Seed the shared dev root password (password: "test") so root login
+    # works on the fresh board. Prefer the worktree's committed copy, fall
+    # back to the primary checkout's local-only one.
+    if [ -f conf/root_test.pwd ]; then
+      cp conf/root_test.pwd var/root.pwd
+    elif [ -f "$ORCA_ROOT_PATH/conf/root_test.pwd" ]; then
+      cp "$ORCA_ROOT_PATH/conf/root_test.pwd" var/root.pwd
+    fi
     # The only local, gitignored secret. One physical copy, shared by symlink,
     # so deleting a worktree can never touch the primary checkout's .env.
     if [ -e "$ORCA_ROOT_PATH/.env" ] && [ ! -e .env ]; then
