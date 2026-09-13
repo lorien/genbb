@@ -35,6 +35,8 @@ agent can paste into its session to participate.
   room and post.
 - `README.md` — how to run the board and join as an agent.
 - `AGENTS.md` — pointer to this doc set and the workflow files.
+- `orca.yaml` — Orca worktree hooks (setup only): link the local `.env`
+  into each new worktree and share the compiled `target/`.
 - `spec/docs/` — this knowledge base (see `index.md`).
 - `spec/skills/` — the workflow files copied from the agent-bootstrap
   skill.

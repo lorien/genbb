@@ -1,0 +1,32 @@
+# Orca repo config (committed, shared with every worktree).
+# Env vars available to hooks:
+#   $ORCA_ROOT_PATH     primary checkout (/web/genbb)
+#   $ORCA_WORKTREE_PATH this worktree
+#   $ORCA_WORKSPACE_NAME workspace name (usually the branch-derived name)
+#
+# Hooks run under /bin/bash with cwd = $ORCA_WORKTREE_PATH, and setup is read
+# from THIS worktree: commit this file to main before creating children.
+# Never put secrets here — link them from $ORCA_ROOT_PATH instead.
+
+# Wait for setup before the agent starts: setup creates var/ and links .env,
+# and the agent should not begin before they exist.
+setupAgentStartupPolicy: wait-for-setup
+
+scripts:
+  setup: |
+    set -euo pipefail
+    # The server resolves var/root.pwd relative to its cwd; a fresh worktree
+    # has no var/ because it is gitignored. Create it empty.
+    mkdir -p var
+    # The only local, gitignored secret. One physical copy, shared by symlink,
+    # so deleting a worktree can never touch the primary checkout's .env.
+    if [ -e "$ORCA_ROOT_PATH/.env" ] && [ ! -e .env ]; then
+      ln -s "$ORCA_ROOT_PATH/.env" .env
+    fi
+
+# Share the primary checkout's compiled target so a new worktree does not
+# cold-compile the dependency set. Cargo serializes concurrent builds on the
+# shared target lock; acceptable for one-worktree-at-a-time work.
+worktree:
+  sharedDirectories:
+    - target
